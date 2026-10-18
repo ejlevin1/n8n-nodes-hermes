@@ -1,0 +1,64 @@
+{
+	"name": "n8n-nodes-hermes",
+	"version": "0.1.0",
+	"description": "n8n nodes for Nous Research Hermes Agent: API server actions, outbound-event trigger, and signed webhook routes",
+	"license": "MIT",
+	"homepage": "https://github.com/ejlevin1/n8n-nodes-hermes#readme",
+	"keywords": [
+		"n8n-community-node-package",
+		"n8n",
+		"hermes",
+		"hermes-agent",
+		"nous-research",
+		"ai-agent"
+	],
+	"author": {
+		"name": "Eric Levin",
+		"email": "eric.levin@kaizentechcollective.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ejlevin1/n8n-nodes-hermes.git"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease",
+		"test": "vitest run"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/HermesApi.credentials.js",
+			"dist/credentials/HermesWebhookApi.credentials.js",
+			"dist/credentials/HermesOutboundWebhookApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/Hermes/Hermes.node.js",
+			"dist/nodes/HermesTrigger/HermesTrigger.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "*",
+		"eslint": "9.32.0",
+		"prettier": "3.6.2",
+		"release-it": "^21.1.0",
+		"typescript": "5.9.2",
+		"n8n-workflow": "2.43.5",
+		"vitest": "^3.2.4"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	},
+	"bugs": {
+		"url": "https://github.com/ejlevin1/n8n-nodes-hermes/issues"
+	}
+}
