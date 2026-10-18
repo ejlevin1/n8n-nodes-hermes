@@ -101,7 +101,7 @@ export const sendMessageDescription: INodeProperties[] = [
 				type: 'string',
 				default: '',
 				description:
-					'Continue an existing Hermes session (sent as the <code>X-Hermes-Session-ID</code> header). The server history then overrides Prior Messages.',
+					'Hermes session to use, sent as the <code>X-Hermes-Session-ID</code> header. If the session exists, Hermes continues it with its stored history (which overrides Prior Messages); if not, Hermes starts a new session under this ID. Use a stable value per conversation (e.g. the chat trigger\'s sessionId) to keep context. Leave empty for a one-off message with no stored history.',
 			},
 			{
 				displayName: 'Session Key',

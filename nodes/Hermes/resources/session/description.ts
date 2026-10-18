@@ -64,7 +64,8 @@ export const sessionOperations: INodeProperties = {
 		{
 			name: 'Send Message',
 			value: 'sendMessage',
-			description: 'Run one agent turn in a session and wait for the reply',
+			description:
+				'Run one agent turn in an existing session (create it first) and wait for the reply. History is kept by the session.',
 			action: 'Send a message to a session',
 		},
 		{
@@ -99,7 +100,8 @@ export const sessionFields: INodeProperties[] = [
 			'setModel',
 			'update',
 		]),
-		description: 'ID of the Hermes session',
+		description:
+			'ID of an existing Hermes session (from Create, Get Many or a chat response). Send Message fails if the session does not exist; to start a conversation by ID instead, use Chat › Send Message with Options › Session ID.',
 	},
 
 	// ---- Get Many ----

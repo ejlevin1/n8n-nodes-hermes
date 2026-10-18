@@ -1,36 +1,11 @@
 import type {
 	IAuthenticate,
-	ICredentialDataDecryptedObject,
 	Icon,
 	ICredentialTestRequest,
 	ICredentialType,
-	IHttpRequestOptions,
 	INodeProperties,
 } from 'n8n-workflow';
-import { buildWebhookSignatureHeaders } from '../nodes/Hermes/helpers/webhookSignature';
-
-/**
- * Signs a request for the Hermes webhook adapter using generic HMAC V2.
- * Only string bodies are signed (the node pre-serialises JSON so the exact bytes are signed);
- * requests without a string body (e.g. the health check) pass through unchanged.
- */
-export async function signHermesWebhookRequest(
-	credentials: ICredentialDataDecryptedObject,
-	requestOptions: IHttpRequestOptions,
-): Promise<IHttpRequestOptions> {
-	const body = requestOptions.body;
-	if (typeof body !== 'string') {
-		return requestOptions;
-	}
-	const secret = String(credentials.secret ?? '');
-	return {
-		...requestOptions,
-		headers: {
-			...(requestOptions.headers ?? {}),
-			...buildWebhookSignatureHeaders(secret, body),
-		},
-	};
-}
+import { signHermesWebhookRequest } from '../nodes/Hermes/helpers/webhookSignature';
 
 export class HermesWebhookApi implements ICredentialType {
 	name = 'hermesWebhookApi';

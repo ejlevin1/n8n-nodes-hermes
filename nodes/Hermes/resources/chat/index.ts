@@ -13,7 +13,8 @@ export const chatDescription: INodeProperties[] = [
 			{
 				name: 'Send Message',
 				value: 'sendMessage',
-				description: 'Send a message to the agent and wait for its reply',
+				description:
+					'Send a message to the agent and wait for its reply. Set Options › Session ID to keep conversation history across messages.',
 				action: 'Send a message',
 			},
 		],

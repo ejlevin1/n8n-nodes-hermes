@@ -2,7 +2,10 @@
 	"node": "n8n-nodes-hermes.hermes",
 	"nodeVersion": "1.0",
 	"codexVersion": "1.0",
-	"categories": ["Development", "Utility"],
+	"categories": [
+		"Development",
+		"Utility"
+	],
 	"resources": {
 		"credentialDocumentation": [
 			{
@@ -14,5 +17,18 @@
 				"url": "https://github.com/ejlevin1/n8n-nodes-hermes#readme"
 			}
 		]
-	}
+	},
+	"alias": [
+		"Hermes Agent",
+		"Nous Research",
+		"Nous",
+		"AI agent",
+		"Agent",
+		"LLM",
+		"Chat",
+		"OpenAI compatible",
+		"Runs",
+		"Sessions",
+		"Cron"
+	]
 }

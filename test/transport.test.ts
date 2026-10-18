@@ -157,6 +157,18 @@ describe('hermesApiRequest', () => {
 		expect(opts.json).toBeUndefined();
 	});
 
+	it('sends an empty object body as a literal {} (n8n would drop it)', async () => {
+		const { ctx, httpRequestWithAuthentication } = mockContext({
+			statusCode: 201,
+			headers: {},
+			body: { session: { id: 's1' } },
+		});
+		await hermesApiRequest.call(ctx, 'POST', '/api/sessions', { body: {} });
+		const [, opts] = httpRequestWithAuthentication.mock.calls[0];
+		expect(opts.body).toBe('{}');
+		expect(opts.headers['Content-Type']).toBe('application/json');
+	});
+
 	it('returns the full response when asked', async () => {
 		const { ctx } = mockContext({
 			statusCode: 200,

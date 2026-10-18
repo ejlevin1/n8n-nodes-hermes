@@ -216,8 +216,11 @@ export async function hermesApiRequest(
 	if (opts.qs && Object.keys(opts.qs).length) requestOptions.qs = opts.qs;
 	if (opts.timeout !== undefined && opts.timeout > 0) requestOptions.timeout = opts.timeout;
 	if (opts.body !== undefined) {
-		requestOptions.body = opts.body;
-		if (typeof opts.body === 'string') {
+		// n8n's request helper drops an empty object body entirely, and Hermes rejects a
+		// POST without JSON, so send `{}` as a literal string.
+		requestOptions.body =
+			typeof opts.body === 'object' && !Object.keys(opts.body).length ? '{}' : opts.body;
+		if (typeof requestOptions.body === 'string') {
 			requestOptions.headers = { 'Content-Type': 'application/json', ...requestOptions.headers };
 		} else {
 			requestOptions.json = true;

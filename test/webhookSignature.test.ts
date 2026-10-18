@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IHttpRequestOptions } from 'n8n-workflow';
-import {
-	HermesWebhookApi,
-	signHermesWebhookRequest,
-} from '../credentials/HermesWebhookApi.credentials';
+import { HermesWebhookApi } from '../credentials/HermesWebhookApi.credentials';
 import {
 	buildWebhookSignatureHeaders,
+	signHermesWebhookRequest,
 	computeWebhookSignatureV2,
 	currentTimestampSeconds,
 } from '../nodes/Hermes/helpers/webhookSignature';
@@ -84,5 +82,20 @@ describe('HermesWebhookApi authenticate', () => {
 			body: { a: 1 },
 		};
 		expect(await signHermesWebhookRequest({ secret: SECRET }, request)).toBe(request);
+	});
+});
+
+describe('credential modules', () => {
+	// n8n's loader instantiates the module's export; a second export breaks loading.
+	it('each export only their class', async () => {
+		expect(Object.keys(await import('../credentials/HermesApi.credentials'))).toEqual([
+			'HermesApi',
+		]);
+		expect(Object.keys(await import('../credentials/HermesWebhookApi.credentials'))).toEqual([
+			'HermesWebhookApi',
+		]);
+		expect(
+			Object.keys(await import('../credentials/HermesOutboundWebhookApi.credentials')),
+		).toEqual(['HermesOutboundWebhookApi']);
 	});
 });

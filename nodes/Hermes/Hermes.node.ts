@@ -38,7 +38,8 @@ export class Hermes implements INodeType {
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
-		description: 'Drive Nous Research Hermes Agent: chat, runs, sessions, cron jobs and webhooks',
+		description:
+			'Use Hermes Agent (Nous Research): chat with the agent, start async runs with approvals, and manage sessions, cron jobs and webhook routes',
 		defaults: {
 			name: 'Hermes',
 		},
