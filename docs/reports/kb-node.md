@@ -11,4 +11,3 @@ points at `docs/PLAN.md`, but that repo is the bare "Initial skeleton" commit (8
 
 So I built the part of this lane that the **read-only Hermes source determines on its own**, and did not
 invent the part that only PLAN.md can specify. Details in "Not built" below.
-

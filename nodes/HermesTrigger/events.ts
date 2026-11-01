@@ -30,14 +30,50 @@ export const HERMES_TRIGGER_EVENTS: INodePropertyOptions[] = [
 		description: 'A pending human-input wait ended (answered, skipped, timed out or failed)',
 	},
 	{
+		name: 'Kanban Dispatch Tick',
+		value: 'on_kanban_dispatch_tick',
+		description:
+			'One dispatcher tick finished. Carries board, dry_run, outcome (ok, skipped_locked or idle) and the full DispatchResult in extra.',
+	},
+	{
 		name: 'Kanban Task Blocked',
 		value: 'kanban_task_blocked',
-		description: 'A Kanban task moved to blocked',
+		description: 'A Kanban task moved to blocked. Carries board, assignee, run_id and reason.',
+	},
+	{
+		name: 'Kanban Task Claimed',
+		value: 'kanban_task_claimed',
+		description:
+			'A Kanban task was claimed by the dispatcher, just before the worker is spawned. Carries board, assignee and run_id.',
 	},
 	{
 		name: 'Kanban Task Completed',
 		value: 'kanban_task_completed',
-		description: 'A Kanban task was completed',
+		description: 'A Kanban task was completed. Carries board, assignee, run_id and summary.',
+	},
+	{
+		name: 'Kanban Task Updated',
+		value: 'on_kanban_task_updated',
+		description:
+			'A Kanban task row was written outside claim, complete or block. Carries changed_fields — field names only, never values.',
+	},
+	{
+		name: 'Kanban Worker Exited',
+		value: 'on_kanban_worker_exited',
+		description:
+			'A Kanban worker process was found dead and reclaimed. Carries worker_pid, exit_kind, exit_code, outcome and retry_status.',
+	},
+	{
+		name: 'Kanban Worker Spawned',
+		value: 'on_kanban_worker_spawned',
+		description:
+			'A Kanban worker process was started for a claimed task. Carries worker_pid and workspace_path.',
+	},
+	{
+		name: 'Kanban Worker Stale Claim',
+		value: 'on_kanban_worker_stale_claim',
+		description:
+			'A Kanban claim passed its TTL and was reclaimed. Carries worker_pid, heartbeat_stale and retry_status.',
 	},
 	{
 		name: 'LLM Call Finished',
@@ -109,6 +145,23 @@ export const HERMES_TRIGGER_EVENT_VALUES: string[] = HERMES_TRIGGER_EVENTS.map((
 
 export const TOOL_SCOPED_EVENTS = ['pre_tool_call', 'post_tool_call'];
 
+/**
+ * Kanban hooks (hermes_cli/plugins.py `VALID_HOOKS`). Every one carries `board`, `task_id`,
+ * `assignee`, `run_id` and `profile_name` as hook kwargs, so they all land in `extra` (only
+ * tool_name/args/session_id/parent_session_id are top-level — agent/shell_hooks.py
+ * `_TOP_LEVEL_PAYLOAD_KEYS`). These are the events the Board filter narrows.
+ */
+export const KANBAN_EVENTS = [
+	'kanban_task_claimed',
+	'kanban_task_completed',
+	'kanban_task_blocked',
+	'on_kanban_task_updated',
+	'on_kanban_worker_spawned',
+	'on_kanban_worker_exited',
+	'on_kanban_worker_stale_claim',
+	'on_kanban_dispatch_tick',
+];
+
 export const DEFAULT_EVENTS = ['post_llm_call'];
 
 export const DEFAULT_SIGNING_ENV_VAR = 'HERMES_N8N_WEBHOOK_SECRET';
@@ -120,6 +173,8 @@ export interface HermesTriggerFilters {
 	events: string[];
 	/** Accepted `extra.platform` values (case-insensitive). Empty or undefined: any platform. */
 	platforms?: string[];
+	/** Accepted `extra.board` values (case-insensitive). Empty or undefined: any board. */
+	boards?: string[];
 	/** Session to match against session_id / extra.session_key / parent / child session ids. */
 	sessionId?: string;
 	/** Regex matched against `tool_name`. Invalid regex falls back to literal equality (as Hermes does). */
@@ -132,6 +187,8 @@ export interface NormalizedHermesEvent extends IDataObject {
 	event: string;
 	profile: string | null;
 	platform: string | null;
+	/** `extra.board` for Kanban events, else null. Mirrors how `platform` is surfaced. */
+	board: string | null;
 	sessionId: string | null;
 	toolName: string | null;
 	toolInput: IDataObject | null;
@@ -243,6 +300,14 @@ export function getFilterRejection(
 		}
 	}
 
+	const boards = (filters.boards ?? []).map((b) => b.toLowerCase());
+	if (boards.length > 0) {
+		const board = asNonEmptyString(asObject(payload.extra).board)?.toLowerCase() ?? null;
+		if (board === null || !boards.includes(board)) {
+			return `board "${board ?? ''}" not in filter`;
+		}
+	}
+
 	const sessionId = filters.sessionId?.trim();
 	if (sessionId) {
 		if (!getSessionCandidates(payload).includes(sessionId)) return 'session does not match filter';
@@ -280,6 +345,7 @@ export function normalizeEvent(payload: IDataObject, headers?: HeaderBag): Norma
 		event: getEventName(payload, headers),
 		profile: asNonEmptyString(payload.profile),
 		platform: asNonEmptyString(extra.platform),
+		board: asNonEmptyString(extra.board),
 		sessionId: getSessionCandidates(payload)[0] ?? null,
 		toolName: asNonEmptyString(payload.tool_name),
 		toolInput:

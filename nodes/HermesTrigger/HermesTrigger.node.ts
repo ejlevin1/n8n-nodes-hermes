@@ -16,6 +16,7 @@ import {
 	DEFAULT_EVENTS,
 	DEFAULT_SIGNING_ENV_VAR,
 	HERMES_TRIGGER_EVENTS,
+	KANBAN_EVENTS,
 	TOOL_SCOPED_EVENTS,
 	buildOutboundYaml,
 	getFilterRejection,
@@ -50,6 +51,14 @@ const APPROVAL_EVENTS_NOTICE =
 	'correlated with <code>/v1/runs</code>. For API-driven runs, use the Hermes node’s Run ' +
 	'operations (Wait for Completion and Respond to Approval) instead. Hermes auto-denies pending ' +
 	'approvals after <code>approvals.timeout</code> (default 300 s).';
+
+const KANBAN_EVENTS_NOTICE =
+	'Kanban events carry their task coordinates in <code>extra</code> ' +
+	'(<code>task_id</code>, <code>board</code>, <code>assignee</code>, <code>run_id</code>, ' +
+	'<code>profile_name</code>); <code>board</code> is also surfaced top-level as ' +
+	'<code>board</code>. Use the Board filter below to watch a single board. Note that ' +
+	'<code>on_kanban_task_updated</code> reports <code>changed_fields</code> as field names only, ' +
+	'never their values.';
 
 function reject(this: IWebhookFunctions, status: number): IWebhookResponseData {
 	this.getResponseObject().status(status).end();
@@ -124,6 +133,17 @@ export class HermesTrigger implements INodeType {
 				},
 			},
 			{
+				displayName: KANBAN_EVENTS_NOTICE,
+				name: 'kanbanEventsNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: {
+					show: {
+						events: KANBAN_EVENTS,
+					},
+				},
+			},
+			{
 				displayName: APPROVAL_EVENTS_NOTICE,
 				name: 'approvalEventsNotice',
 				type: 'notice',
@@ -148,6 +168,15 @@ export class HermesTrigger implements INodeType {
 				description:
 					'Events that do not match are acknowledged with HTTP 200 without starting the workflow. When a filter is set, events that lack the field are dropped.',
 				options: [
+					{
+						displayName: 'Board',
+						name: 'boards',
+						type: 'string',
+						default: '',
+						placeholder: 'main, release',
+						description:
+							'Comma-separated list matched (case-insensitive) against <code>extra.board</code> on Kanban events. Events without a board are dropped when this is set.',
+					},
 					{
 						displayName: 'Platform',
 						name: 'platforms',
@@ -334,6 +363,7 @@ export class HermesTrigger implements INodeType {
 		const rejection = getFilterRejection(payload, headers, {
 			events,
 			platforms: parseList(filters.platforms),
+			boards: parseList(filters.boards),
 			sessionId: typeof filters.sessionId === 'string' ? filters.sessionId : undefined,
 			toolName: typeof filters.toolName === 'string' ? filters.toolName : undefined,
 			profile,

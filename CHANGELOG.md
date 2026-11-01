@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Six more Kanban events on the **Hermes Trigger** node: Kanban Task Claimed (`kanban_task_claimed`), Kanban Task Updated (`on_kanban_task_updated`), Kanban Worker Spawned / Exited / Stale Claim and Kanban Dispatch Tick. Together with the existing Completed and Blocked events this covers every Kanban hook in Hermes' `VALID_HOOKS`.
+- Optional **Board** filter in the **Hermes Trigger** Filters collection, matched (case-insensitively, comma-separated) against `extra.board`.
+- `board` on the trigger's output item, surfaced from `extra.board` the same way `platform` already is.
 - Optional **Profile** filter on the **Hermes Trigger** node, matched against the event `profile` field.
 - A hint on 401/404 responses when the credential Base URL targets a named profile (`…/p/<profile>`), about per-profile `API_SERVER_KEY` and served profiles.
 

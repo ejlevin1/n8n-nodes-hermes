@@ -200,26 +200,45 @@ Both Hermes error shapes (`{"error": {"message", "type", "code"}}` and `{"error"
 
 The Hermes Trigger accepts these events (select one or more):
 
-| Event                                         | Hook name                                                                       |
-| --------------------------------------------- | ------------------------------------------------------------------------------- |
-| LLM Call Finished                             | `post_llm_call`                                                                 |
-| Session Started / Ended / Finalized / Reset   | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset` |
-| Tool Call Starting / Finished                 | `pre_tool_call`, `post_tool_call`                                               |
-| Subagent Started / Stopped                    | `subagent_start`, `subagent_stop`                                               |
-| Pre Approval Request / Post Approval Response | `pre_approval_request`, `post_approval_response`                                |
-| Human Input Request / Resolved                | `on_human_input_request`, `on_human_input_resolved`                             |
-| Kanban Task Completed / Blocked               | `kanban_task_completed`, `kanban_task_blocked`                                  |
-| Agent Loop Stopped                            | `agent_loop_stopped`                                                            |
-| API Request Error                             | `api_request_error`                                                             |
-| Stream Ended                                  | `on_stream_end`                                                                 |
+| Event                                         | Hook name                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| LLM Call Finished                             | `post_llm_call`                                                                       |
+| Session Started / Ended / Finalized / Reset   | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`       |
+| Tool Call Starting / Finished                 | `pre_tool_call`, `post_tool_call`                                                     |
+| Subagent Started / Stopped                    | `subagent_start`, `subagent_stop`                                                     |
+| Pre Approval Request / Post Approval Response | `pre_approval_request`, `post_approval_response`                                      |
+| Human Input Request / Resolved                | `on_human_input_request`, `on_human_input_resolved`                                   |
+| Kanban Task Claimed / Completed / Blocked     | `kanban_task_claimed`, `kanban_task_completed`, `kanban_task_blocked`                 |
+| Kanban Task Updated                           | `on_kanban_task_updated`                                                              |
+| Kanban Worker Spawned / Exited / Stale Claim  | `on_kanban_worker_spawned`, `on_kanban_worker_exited`, `on_kanban_worker_stale_claim` |
+| Kanban Dispatch Tick                          | `on_kanban_dispatch_tick`                                                             |
+| Agent Loop Stopped                            | `agent_loop_stopped`                                                                  |
+| API Request Error                             | `api_request_error`                                                                   |
+| Stream Ended                                  | `on_stream_end`                                                                       |
 
 Per-token `on_stream_delta`, `pre_gateway_dispatch` and the `transform_*` hooks are not offered.
 
-**Filters**: Platform (matches `extra.platform`, e.g. `cron`, `webhook`, `api_server`, `cli`), Session ID (matches `session_id`, `extra.session_key`, `extra.parent_session_id` or `extra.child_session_id`) and Tool Name (regex). Events that don't match are acknowledged with HTTP 200 and don't start the workflow.
+**Filters**: Board (comma-separated, matches `extra.board` case-insensitively on Kanban events), Platform (matches `extra.platform`, e.g. `cron`, `webhook`, `api_server`, `cli`), Session ID (matches `session_id`, `extra.session_key`, `extra.parent_session_id` or `extra.child_session_id`) and Tool Name (regex). Events that don't match are acknowledged with HTTP 200 and don't start the workflow. When a filter is set, events that lack the field are dropped.
 
 **Options**: Verify Signature (default on; bad or missing signatures get HTTP 401), Reject Stale Events (default on; the signed `timestamp` must be within Max Event Age, default 300 s).
 
-Each item contains `{event, profile, platform, sessionId, toolName, toolInput, cwd, extra, deliveryId, timestamp}`.
+Each item contains `{event, profile, platform, board, sessionId, toolName, toolInput, cwd, extra, deliveryId, timestamp}`.
+
+### Kanban events
+
+The Kanban hooks carry their task coordinates as hook kwargs, so they arrive inside `extra`: `task_id`, `board`, `assignee`, `run_id` and `profile_name`. `board` is also surfaced top-level (like `platform`) so the Board filter is easy to pair with an expression. Per-event additions:
+
+| Event                          | Adds to `extra`                                                        |
+| ------------------------------ | ---------------------------------------------------------------------- |
+| `kanban_task_completed`        | `summary`                                                              |
+| `kanban_task_blocked`          | `reason`                                                               |
+| `on_kanban_task_updated`       | `changed_fields` — field **names** only, never their values            |
+| `on_kanban_worker_spawned`     | `worker_pid`, `workspace_path`                                         |
+| `on_kanban_worker_exited`      | `worker_pid`, `exit_kind`, `exit_code`, `outcome`, `retry_status`      |
+| `on_kanban_worker_stale_claim` | `worker_pid`, `heartbeat_stale`, `retry_status`                        |
+| `on_kanban_dispatch_tick`      | `board`, `dry_run`, `outcome` (`ok`/`skipped_locked`/`idle`), `result` |
+
+`kanban_task_claimed` fires in the dispatcher just before the worker is spawned; `completed` and `blocked` fire in whichever process drove the task. All of them fire **after** the DB commit, so a slow n8n workflow never holds the SQLite write lock.
 
 **Caveats**
 
