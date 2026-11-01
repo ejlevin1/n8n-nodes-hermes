@@ -39,7 +39,7 @@ export class Hermes implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description:
-			'Use Hermes Agent (Nous Research): chat with the agent, start async runs with approvals, and manage sessions, cron jobs and webhook routes',
+			'Use Hermes Agent (Nous Research): chat with the agent, start async runs with approvals, drive Kanban boards, and manage sessions, cron jobs and webhook routes',
 		defaults: {
 			name: 'Hermes',
 		},

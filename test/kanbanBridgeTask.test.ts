@@ -40,9 +40,11 @@ interface FakeResponse {
 
 function mockContext(params: IDataObject, response: FakeResponse, credentials?: IDataObject) {
 	const httpRequestWithAuthentication = vi.fn().mockResolvedValue({ headers: {}, ...response });
-	const getCredentials = vi.fn().mockResolvedValue(
-		credentials ?? { baseUrl: `${BASE_URL}/`, hostHeader: HOST_HEADER, token: TOKEN },
-	);
+	const getCredentials = vi
+		.fn()
+		.mockResolvedValue(
+			credentials ?? { baseUrl: `${BASE_URL}/`, hostHeader: HOST_HEADER, token: TOKEN },
+		);
 	const ctx = {
 		getCredentials,
 		getNode: () => node,
@@ -64,7 +66,11 @@ function credentialTypeUsed(mock: ReturnType<typeof vi.fn>): string {
 async function run(operation: string, params: IDataObject, response: FakeResponse) {
 	const { ctx, httpRequestWithAuthentication } = mockContext(params, response);
 	const items = await executeKanbanTask.call(ctx, operation, 0);
-	return { items, request: sent(httpRequestWithAuthentication), mock: httpRequestWithAuthentication };
+	return {
+		items,
+		request: sent(httpRequestWithAuthentication),
+		mock: httpRequestWithAuthentication,
+	};
 }
 
 async function expectFailure(operation: string, params: IDataObject, response: FakeResponse) {
@@ -273,7 +279,11 @@ describe('Kanban Task: request body per operation', () => {
 	it('Create surfaces an idempotent replay as created: false', async () => {
 		const { items } = await run(
 			'create',
-			{ board: 'acquisitions', title: 'A task', createOptions: { idempotencyKey: 'kbb_test_key_1' } },
+			{
+				board: 'acquisitions',
+				title: 'A task',
+				createOptions: { idempotencyKey: 'kbb_test_key_1' },
+			},
 			ok({ task_id: 'kbb_test_task_9', created: false, status: 'ready' }),
 		);
 		expect(items).toEqual([
@@ -307,7 +317,10 @@ describe('Kanban Task: request body per operation', () => {
 			assignee: 'deal-analyst',
 			limit: KANBAN_LIST_MAX_LIMIT,
 		});
-		expect(items).toEqual([{ json: { id: 'kbb_test_task_1' } }, { json: { id: 'kbb_test_task_2' } }]);
+		expect(items).toEqual([
+			{ json: { id: 'kbb_test_task_1' } },
+			{ json: { id: 'kbb_test_task_2' } },
+		]);
 	});
 
 	it('Get Many returns no items when the board is empty', async () => {
@@ -543,11 +556,15 @@ describe('Kanban Task: error hints', () => {
 	});
 
 	it('403 names the board, assignee and action that fell outside the scopes', () => {
-		const hint = kanbanBridgeErrorMessage(403, { error: { message: 'board not in scope' } }, {
-			board: 'acquisitions',
-			assignee: 'deal-analyst',
-			action: 'assign',
-		});
+		const hint = kanbanBridgeErrorMessage(
+			403,
+			{ error: { message: 'board not in scope' } },
+			{
+				board: 'acquisitions',
+				assignee: 'deal-analyst',
+				action: 'assign',
+			},
+		);
 		expect(hint?.message).toMatch(/not scoped/);
 		expect(hint?.message).toMatch(/acquisitions/);
 		expect(hint?.message).toMatch(/deal-analyst/);
@@ -556,20 +573,28 @@ describe('Kanban Task: error hints', () => {
 	});
 
 	it('404 names the task and board, because task IDs are per board', () => {
-		const hint = kanbanBridgeErrorMessage(404, { detail: 'not found' }, {
-			board: 'acquisitions',
-			taskId: 'kbb_test_task_9',
-		});
+		const hint = kanbanBridgeErrorMessage(
+			404,
+			{ detail: 'not found' },
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+			},
+		);
 		expect(hint?.message).toMatch(/kbb_test_task_9/);
 		expect(hint?.message).toMatch(/acquisitions/);
 		expect(hint?.description).toMatch(/per board/);
 	});
 
 	it('409 shows the transition reason kanban_db gave', () => {
-		const hint = kanbanBridgeErrorMessage(409, { reason: 'task is already done' }, {
-			board: 'acquisitions',
-			taskId: 'kbb_test_task_9',
-		});
+		const hint = kanbanBridgeErrorMessage(
+			409,
+			{ reason: 'task is already done' },
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+			},
+		);
 		expect(hint?.message).toMatch(/task is already done/);
 		expect(hint?.description).toMatch(/review/);
 	});
@@ -613,7 +638,7 @@ describe('Kanban Task: error hints', () => {
 			getCredentials: async () => ({ baseUrl: BASE_URL, hostHeader: HOST_HEADER, token: TOKEN }),
 			getNode: () => node,
 			getNodeParameter: (name: string, _i: number, fallback?: unknown) =>
-				({ board: 'acquisitions', taskId: 'kbb_test_task_9' } as IDataObject)[name] ?? fallback,
+				(({ board: 'acquisitions', taskId: 'kbb_test_task_9' }) as IDataObject)[name] ?? fallback,
 			helpers: { httpRequestWithAuthentication },
 		} as unknown as IExecuteFunctions;
 		await expect(executeKanbanTask.call(ctx, 'get', 0)).rejects.toThrow(

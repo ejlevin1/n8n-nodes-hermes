@@ -101,7 +101,7 @@ export class HermesTrigger implements INodeType {
 		version: 1,
 		subtitle: '={{ ($parameter["events"] || []).join(", ") }}',
 		description:
-			'Starts the workflow when Hermes Agent sends a signed outbound webhook (hooks.outbound)',
+			'Starts the workflow when Hermes Agent sends a signed outbound webhook (hooks.outbound) or the kanban-bridge plugin pushes a Kanban event',
 		defaults: {
 			name: 'Hermes Trigger',
 		},

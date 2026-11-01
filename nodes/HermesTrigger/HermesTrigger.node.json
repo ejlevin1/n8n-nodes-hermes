@@ -26,6 +26,8 @@
 		"Agent",
 		"Webhook",
 		"Hooks",
-		"Events"
+		"Events",
+		"Kanban",
+		"Kanban bridge"
 	]
 }

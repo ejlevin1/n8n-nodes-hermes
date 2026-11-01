@@ -1,225 +1,290 @@
-STATUS: PARTIAL
+STATUS: READY-FOR-LIVE
 
-# Lane `kb-node` — n8n-nodes-hermes: Kanban bridge support
+# Lane `kb-node` — n8n-nodes-hermes: Kanban bridge support (PLAN.md part B)
 
 Branch: `feat/kanban-bridge` (pushed to `origin`). Worktree: `~/Development/n8n-nodes-hermes.wt/kb-node`.
+Package version **not** bumped (still 0.1.0); everything is under `## Unreleased` in CHANGELOG.md.
 
-## Blocking problem: PLAN.md was never delivered to this lane
-
-The lane prompt says "The plan you implement (PLAN.md) is appended below your lane prompt" — **nothing
-was appended**. PLAN.md does not exist anywhere on mbp-m2. What I checked:
-
-- `~/Development/hermes-kanban-bridge/README.md:5` points at `docs/PLAN.md`, but that repo is the bare
-  `83f0ea5 Initial skeleton` commit and contains only `.gitignore`, `README.md`,
-  `docs/reports/.gitkeep`, `plugin/.gitkeep`. Same for the `kb-plugin` worktree and the `plugin/v1` branch.
-- `git log --all --name-only`, `git stash list` and `git for-each-ref` in both repos: no PLAN.md in any
-  commit, branch or stash.
-- Filesystem grep for `kanban_task_moved|kanban/tasks|kanbanTask|kanban-bridge` and for `kb-plugin`
-  across `~/Development`, `~/Documents`, `~/Desktop`: only the two skeleton READMEs and this repo's README.
-- The only `PLAN.md` files on the machine (`~/Development/hermes-tool-approvals/docs/`,
-  `~/Development/_import/docs/`) are the **tool-approvals/iPhone** project, unrelated to this lane.
-
-So I built the part of this lane that the **read-only Hermes source determines on its own**, and did
-**not** invent the part that only PLAN.md can specify. I deliberately did not guess the bridge's REST
-contract: the `kb-plugin` lane is implementing the server side from that same document in parallel, so
-invented paths/bodies would be near-certain to mismatch, and a node that posts to wrong URLs is worse
-than an absent one.
+PLAN.md was delivered on the `kb-node-2` continuation. Part B is now complete: the credential, the
+Kanban Task resource with all twelve operations, the error hints, the new trigger events, the Board
+filter and the targets-config snippet. Everything the first session had built from guesses was
+re-checked against PLAN.md; the two corrections it needed are in "Corrections to the first session"
+below.
 
 ## What was built
 
-### 1. All Kanban trigger events (`nodes/HermesTrigger/events.ts`)
+### 1. Credential — `credentials/HermesKanbanBridgeApi.credentials.ts`
 
-The trigger offered only `kanban_task_completed` and `kanban_task_blocked`. Hermes' own
-`VALID_HOOKS` defines **eight** Kanban hooks (`~/Development/_ref/hermes-agent-b222bce/hermes_cli/plugins.py:108`,
-Kanban blocks at lines 157-176). All eight are now selectable, with descriptions taken from the kwargs
-documented at those lines:
+`hermesKanbanBridgeApi` / "Hermes Kanban Bridge API", exactly the three fields from PLAN.md part B:
 
-| Events option             | Hook value                     |
-| ------------------------- | ------------------------------ |
-| Kanban Dispatch Tick      | `on_kanban_dispatch_tick`      |
-| Kanban Task Blocked       | `kanban_task_blocked`          |
-| Kanban Task Claimed       | `kanban_task_claimed`          |
-| Kanban Task Completed     | `kanban_task_completed`        |
-| Kanban Task Updated       | `on_kanban_task_updated`       |
-| Kanban Worker Exited      | `on_kanban_worker_exited`      |
-| Kanban Worker Spawned     | `on_kanban_worker_spawned`     |
-| Kanban Worker Stale Claim | `on_kanban_worker_stale_claim` |
+| Field           | Type               | Default                            |
+| --------------- | ------------------ | ---------------------------------- |
+| **Base URL**    | string, required   | `http://host.docker.internal:9119` |
+| **Host Header** | string, required   | `127.0.0.1:9119`                   |
+| **Token**       | password, required | — (`kbb_…`)                        |
 
-Exported as `KANBAN_EVENTS` (the one shared constant the node, the notice `displayOptions` and the tests
-all key off). Events options total 18 → 24, still alphabetical by name, no duplicates.
+- Bearer token via `authenticate` (`Authorization: =Bearer {{$credentials.token}}`).
+- **Host override**: the transport sets `Host` per request from `hostHeader` (skipped when blank), and
+  the credential **test request** carries `headers: { Host: '={{$credentials.hostHeader}}' }`. It is
+  deliberately _not_ in `authenticate`: that way the header is visible in the request options the tests
+  assert on, instead of being injected inside `httpRequestWithAuthentication` where a unit test cannot
+  see it. Trade-off recorded under "Known gaps" — the HTTP Request node would not get it for free.
+- Test request: `GET /api/plugins/kanban-bridge/v1/health`, as specified.
+- A notice explains the dashboard-only, loopback-`Host` constraint from the plan's platform facts.
 
-### 2. Board filter, in the existing Filters collection
+### 2. Shared helper — `nodes/Hermes/helpers/kanbanBridge.ts` (the one module the lane asked for)
 
-Per the lane instruction to place fields like their siblings, I ran the inventory first
-(`npm run build` then dumping `description.properties` from `dist`) and confirmed the conventions:
-per-operation optional settings live in each operation's `options`/`additionalFields`/`updateFields`
-collection, and trigger narrowing lives in the trigger's `filters` collection next to Platform,
-Session ID and Tool Name. The Board filter is therefore an **option inside `filters`**, not a top-level
-property — asserted by a test so it can't drift.
+Holds everything both the credential and the resource need: `KANBAN_BRIDGE_CREDENTIAL`,
+`KANBAN_BRIDGE_BASE_PATH` (`/api/plugins/kanban-bridge/v1`), `KANBAN_BRIDGE_HEALTH_PATH`,
+`KANBAN_LIST_MAX_LIMIT` (200), `KANBAN_STATUSES`, `KANBAN_ACTIONS` (n8n operation → wire `action`),
+`kanbanBridgeRequest`, `kanbanBridgeErrorMessage`, `extractTransitionReason`, `requiredString`,
+`parseKanbanList`. The credential imports the health path from here, so the two can never drift (same
+direction as the existing `HermesWebhookApi` → `helpers/webhookSignature` import).
 
-Semantics mirror the existing Platform filter exactly: comma-separated list, matched case-insensitively,
-and an event lacking the field is dropped once the filter is set. It matches **`extra.board`**, not a
-top-level `board`, because of the wire shape below. Sorted ahead of Platform to satisfy the n8n lint
-rule on collection ordering.
+`kanbanBridgeRequest` reuses the existing transport's `joinUrl`, `normalizeHermesError` and
+`createHermesApiError` rather than duplicating them, and carries over its empty-POST-body workaround
+(`{}` as a literal string, since n8n's helper drops an empty object body).
 
-### 3. `board` on the output item
+### 3. Kanban Task resource — `nodes/Hermes/resources/kanbanTask/`
 
-`normalizeEvent` now surfaces `board` from `extra.board`, exactly as it already does for `platform`,
-`profile`, `sessionId` and `toolName` — every other filtered field is also exposed top-level, so this
-follows the established convention rather than adding a new one. Output item is now
-`{event, profile, platform, board, sessionId, toolName, toolInput, cwd, extra, deliveryId, timestamp}`.
+All twelve operations from E1, each mapped onto the plan's routes:
 
-### 4. Kanban setup notice
+| Operation          | Route           | Body                                                                                                                   |
+| ------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Create             | `tasks/create`  | `board, title` + `body, assignee, priority, parents[], skills[], idempotency_key, triage, max_runtime_seconds, tenant` |
+| Get                | `tasks/get`     | `board, task_id`                                                                                                       |
+| Get Many           | `tasks/list`    | `board, status, assignee, limit`                                                                                       |
+| Comment            | `tasks/comment` | `board, task_id, body`                                                                                                 |
+| Complete (Approve) | `tasks/action`  | `action: complete` + `summary, result, metadata`                                                                       |
+| Request Changes    | `tasks/action`  | `action: request_changes` + `reason`                                                                                   |
+| Block              | `tasks/action`  | `action: block` + `reason`                                                                                             |
+| Unblock / Archive  | `tasks/action`  | `action: unblock` / `archive`                                                                                          |
+| Assign             | `tasks/action`  | `action: assign` + `assignee`                                                                                          |
+| Reprioritize       | `tasks/action`  | `action: reprioritize` + `priority`                                                                                    |
+| Edit               | `tasks/action`  | `action: edit` + `title` / `body`                                                                                      |
 
-`kanbanEventsNotice` shows only when a Kanban event is selected (`displayOptions.show.events: KANBAN_EVENTS`),
-explaining that the task coordinates arrive in `extra`, that `board` is also top-level, and that
-`on_kanban_task_updated` carries `changed_fields` as field **names only, never values** (a privacy
-property stated at `hermes_cli/plugins.py:171`).
+Field placement follows the inventory of the existing collections (dumped from `dist` after
+`npm run build`, as the lane asked): **Board** is required on every operation, **Task ID** on the ten
+that address an existing task, and every optional per-request setting sits in that operation's own
+collection — `createOptions`, `completeOptions`, `editFields` ("Fields to Edit"), `listFilters`
+("Filters"). Nothing optional was added at top level. Get Many splits `{tasks: […]}` into one output
+item per task; everything else returns the response body as one item.
 
-### 5. Wire shape, verified against source (not guessed)
+Local validation before anything goes on the wire: empty Board/Title/Task ID/Comment/Reason/Assignee,
+an Edit with no fields, a non-integer Priority, and malformed Metadata JSON.
 
-- `agent/outbound_webhooks.py:249` `_serialize_payload` → body is
-  `{hook_event_name, profile, ...<_payload_fields>, delivery_id, timestamp}`.
-- `agent/shell_hooks.py:87` `_payload_fields` + `:49` `_TOP_LEVEL_PAYLOAD_KEYS = {"tool_name", "args",
-"session_id", "parent_session_id"}` → **every other hook kwarg goes into `extra`**. So `board`,
-  `task_id`, `assignee`, `run_id`, `profile_name` are all in `extra`, which is why the Board filter
-  reads `extra.board`.
-- `agent/outbound_webhooks.py:263` `_build_delivery` → signature is
-  `X-Hermes-Signature-256: sha256=<hex HMAC-SHA256 of the raw body>`, plus `X-Hermes-Event` and
-  `X-Hermes-Delivery`. This is what the node's existing `verifySignature` already implements, so the
-  bridge-shaped-body signature tests exercise the real scheme.
+### 4. Error hints
 
-### 6. Tests — `test/kanbanBridgeTrigger.test.ts` (26 tests, new file)
+`kanbanBridgeErrorMessage` covers exactly the five statuses the plan names, and leaves everything else
+(5xx, 429, …) to the existing shared normaliser:
 
-Covers: the event catalogue matches `VALID_HOOKS` exactly; every Kanban event is registered and the
-options stay sorted/duplicate-free; description shape (Board is inside `filters`, correct type/default,
-collection stays sorted, notice gated on Kanban events); event matching incl. the `X-Hermes-Event`
-header fallback; the Board filter (case-insensitive, multi-board, non-match, missing-board drop, unset,
-and composition with the Profile filter); normalized output (`board` top-level, coordinates preserved in
-`extra`, `board: null` for non-Kanban events, `changed_fields` passthrough); and the webhook end-to-end
-with a **bridge-shaped body** — signed delivery starts the workflow, signature is verified over the exact
-raw bytes, a tampered body and an unsigned body both get HTTP 401, a non-matching board is acknowledged
-HTTP 200 without starting the workflow, and stale deliveries are rejected/accepted per the option.
+- **400** — names the server message and lists the required fields per operation.
+- **401** — "rejected the token", points at `kbctl token list` and the `kbb_` prefix.
+- **403** — names which of board / assignee / action fell outside the scopes, and the exact
+  `kbctl token scope <label> …` fix. Scope context is threaded from the operation, so the message is
+  specific (e.g. _not scoped for board "acquisitions" / assignee "deal-analyst" / action "assign"_).
+- **404** — names task and board and explains that task IDs are per board.
+- **409** — shows the `kanban_db` reason. `extractTransitionReason` looks for `reason` top-level, under
+  `error`, and under `detail` (FastAPI's envelope), falling back to the server message, because the
+  exact error envelope is the plugin lane's choice and PLAN.md does not pin it.
 
-All synthetic values only (`kbb_test_...`, `Alex Example`); no real hostnames, keys or personal data.
+A network failure explains the dashboard-only deployment (launchd `me.ericlevin.hermes-dashboard`,
+plugin enabled in `default`, Base URL / Host Header).
+
+### 5. Trigger: bridge events, wildcard and ping
+
+New event options: **Kanban Task Created / Review Requested / Changes Requested / Unblocked /
+Archived** — the kinds Hermes fires no hook for — plus **Any Kanban Event**, a wildcard
+(`KANBAN_ANY_EVENT = 'kanban_task_*'`) matching every `kanban_task_*` delivery including kinds the
+plugin adds later, and the `kanban_bridge_ping`. Claimed/Completed/Blocked already existed under the
+identical names, so one selection now matches either source — asserted by a test.
+
+`isEventSelected` implements the wildcard; it deliberately does **not** widen to the Hermes
+`on_kanban_*` hooks (those are not `kanban_task_*` deliveries). Ping handling is exactly as the wire
+contract says: accepted when the wildcard is selected, otherwise HTTP 200 + ignored.
+
+Event sets are split so each has one meaning: `KANBAN_HOOK_EVENTS` (Hermes `VALID_HOOKS`),
+`KANBAN_BRIDGE_EVENTS` (what the plugin pushes, incl. the wildcard) and `KANBAN_EVENTS` (the union,
+used by the Board-filter notice).
+
+### 6. Targets config snippet
+
+`buildKanbanTargetsYaml` emits the plan's shape, in its own notice gated on `KANBAN_BRIDGE_EVENTS`:
+
+```yaml
+plugins:
+  entries:
+    kanban-bridge:
+      settings:
+        targets:
+          - name: n8n
+            url: '<this node's Production URL>'
+            boards: ['*']
+            events: ['*']
+            secret_env: HERMES_N8N_WEBHOOK_SECRET
+```
+
+The wildcard renders `events: ["*"]`; named selections render the list; non-bridge selections are
+filtered out. The notice states plainly that these do **not** come from `hooks.outbound`, and the
+existing `hooks.outbound` notice now says so too and points at it. The secret is only ever referenced
+by `secret_env`, never inlined. `buildOutboundYaml` is untouched and still emits the `hooks.outbound`
+shape for the Hermes hooks.
 
 ### 7. Docs
 
-`README.md`: the Trigger events table now lists all eight Kanban hooks; the Filters paragraph documents
-Board; a new **Kanban events** subsection gives the per-event `extra` additions and the commit/lock
-ordering. `CHANGELOG.md`: three entries under the existing `## Unreleased`. Package version **not** bumped.
+`README.md`: four-surface table; a **Hermes Kanban Bridge** credential section (enable plugin →
+`kbctl token create --out` → credential, scopes, `n8n:<label>` attribution, why Base URL and Host
+Header are separate); a **Kanban Task** operations section with the route/field table and the error
+semantics; and a rewritten **Kanban events** section with the two-sources table, the wildcard, the ping,
+the targets YAML and where each source puts the task fields. `CHANGELOG.md`: four new entries under the
+existing `## Unreleased`, plus the two amended ones.
 
 ## Gate outputs
 
 | Gate                                | Result                                   |
 | ----------------------------------- | ---------------------------------------- |
-| `npx vitest run`                    | **15 files, 261 tests passed**, 0 failed |
+| `npx vitest run`                    | **17 files, 345 tests passed**, 0 failed |
 | `npx tsc --noEmit -p tsconfig.json` | exit 0, no diagnostics                   |
 | `npm run lint`                      | exit 0, no errors or warnings            |
 | `npm run build`                     | exit 0, "Build successful"               |
 
-Baseline before my changes was 14 files / 235 tests; I added 26 and changed 0 behaviourally
-(see deviation 1). Prettier run only on the files I touched (all already conformant except README.md).
+Baseline at the start of this session was 15 files / 264 tests; the new work adds 81 tests in two new
+files plus 24 appended to the existing Kanban trigger file, and changed nothing behaviourally in the
+other resources. Test counts by new/changed file:
+
+- `test/kanbanBridgeCredential.test.ts` — 10 (new)
+- `test/kanbanBridgeTask.test.ts` — 43 (new)
+- `test/kanbanBridgeTrigger.test.ts` — 57 (was 29)
+
+Prettier was run only on the files touched. Two exceptions, both pre-existing: `Hermes.node.json` and
+`HermesTrigger.node.json` are not prettier-conformant on `main` either (prettier wants
+`"categories": ["Development", "Utility"]` on one line), so adding alias entries to them was left in the
+repo's own style rather than reformatting unrelated lines. `nodes/Hermes/resources/chat/sendMessage.ts`
+is also non-conformant on `main` and was not touched.
+
+## Corrections to the first session
+
+The first session had no PLAN.md and said so. Checking its work against the real plan found two things
+to fix, both now corrected:
+
+1. **The Board filter read only `extra.board`.** That is right for Hermes hooks, but the bridge's wire
+   contract puts `board` **top-level**, so bridge deliveries would have been dropped by any Board
+   filter. `getEventBoard` now reads top-level `board` first, then `extra.board`; the filter and the
+   output item both use it. Tested from both shapes.
+2. **Bridge task fields would have been silently discarded.** `normalizeEvent` returns a fixed-shape
+   item, so the bridge's top-level `task_id, event_id, event_kind, run_id, title, status, assignee,
+priority, actor, payload` had nowhere to go. They are now folded into `extra` for bridge deliveries
+   only — which also makes the two sources read alike (`extra.task_id` either way). An explicit `extra`
+   in the body still wins; absent keys are omitted rather than nulled.
+
+Everything else it built (the eight Hermes Kanban hook options, the Board filter's placement inside the
+existing Filters collection, `board` top-level on the item, the signature work) matched PLAN.md and was
+kept. Its "PLAN.md missing" deviation is resolved and removed.
 
 ## Deviations from PLAN.md
 
-PLAN.md was unavailable, so "deviation" can only be measured against the lane prompt's summary of it.
+1. **"List" is labelled "Get Many" (value `getAll`).** PLAN.md part B names the operation _List_. n8n's
+   UX guidelines and the repo's own convention (Cron Job, Session) use _Get Many_, and
+   `n8n-nodes-base/node-param-description-wrong-for-limit` enforces the paired `Limit` wording, which
+   is part of the same pattern. The wire call is unchanged: `POST v1/tasks/list`. Label only.
+2. **"Any Kanban Event" has no `(kanban_task_*)` suffix in its label.** PLAN.md writes the option as
+   `Any Kanban Event (kanban_task_*)`; n8n's option-name title-case lint rejects the bare lowercase
+   identifier (it autofixes to the nonsense `Kanban_task_*`). The pattern is in the option's
+   description and in the README table instead.
+3. **Reason is `required` for Request Changes and Block.** PLAN.md lists it as a per-action field
+   without saying whether it is mandatory; `request_changes`/`block` are meaningless without one, and a
+   client-side check beats a 400. If the plugin accepts a reason-less block, this is stricter than the
+   server by one field.
+4. **Create's Max Runtime (Seconds) shows a default of 1800 in the collection UI.** Collection options
+   need a `default`; it is only sent when the user adds the field, so an untouched Create still omits
+   `max_runtime_seconds` and the board default applies.
 
-1. **`test/trigger.test.ts:104` edited** (outside a `kanbanBridge*` file). That test asserts the
-   normalized item with `toEqual`, i.e. an exact-shape assertion, so adding `board` to the output broke
-   it. I added `board: null` to the expectation — the assertion still pins the full shape and nothing was
-   weakened or skipped. This is the only pre-existing file changed other than the trigger node, README
-   and CHANGELOG.
-2. **Event names come from the Hermes source, not the plan.** The lane prompt says "the new trigger
-   events" without naming them; I took the eight Kanban hooks in `VALID_HOOKS`. If PLAN.md instead
-   specifies bridge-invented event names, these are additive and correct for the hooks Hermes already
-   fires, but the plan's names would need adding on top — a one-array change.
-3. **`board` exposed top-level on the output item** is slightly beyond a literal reading of "Board
-   filter". I did it because every other filtered field is exposed that way and the lane instruction is
-   to place things like their siblings; it is a pure addition. Easy to revert if the plan says otherwise.
+## Known gaps
 
-## Not built — needs PLAN.md
-
-These are the parts whose contract only PLAN.md defines. Each needs the listed specifics before it can
-be written; I have **no** basis in the read-only source for any of them, because the bridge plugin's
-HTTP surface does not exist in `_ref`.
-
-1. **Bridge credential** (`credentials/HermesKanbanBridgeApi.credentials.ts`) — need: credential name/
-   display name, field list, how the bearer token is sent (`Authorization: Bearer` assumed but unstated),
-   the exact **Host header override** field semantics (fixed value? only when set? applied to every
-   request?), and the health path for the test request (`/health`? `/kanban/health`? versioned?).
-2. **Kanban Task resource** (`nodes/Hermes/resources/kanbanTask/`) — need: the operation list ("all
-   operations" is unresolvable), and per operation the HTTP method, path, path/query params and request
-   body shape. Also whether it registers as a new `ResourceValue` on the existing Hermes node (and so
-   needs its own `credentials[].displayOptions` entry like `webhookRoute` has) or as a separate node.
-3. **Error hints** — the lane prompt names 401 token / 403 scope / 404 / 409 reason, but the hints must
-   key off the bridge's actual error `code` values (the existing `normalizeHermesError` switches on
-   `code`, e.g. `gateway_auth_failed`, `permission_denied`). Need the bridge's code strings and the 409
-   `reason` field's location in the body.
-4. **Shared helper module** — the lane asks for one; it has nothing to hold until (1)-(3) are specified.
-5. **kanban-bridge targets config YAML snippet** — the bridge has its **own** targets config (per its
-   README it does "signed push", separate from `hooks.outbound`). Need the config file path, the block
-   structure and the key names. The existing `buildOutboundYaml` emits the `hooks.outbound` shape and is
-   almost certainly the wrong one; I left it untouched rather than guess.
-6. **Ping handling** — not a concept in the current trigger or in Hermes' outbound webhooks. Need the
-   ping's event name/body and the expected response (HTTP 200 + what payload?) before implementing.
+1. **Nothing was tested against a live bridge** — the plugin is being built in parallel, so every test
+   runs against fakes shaped by the wire contract. The parts most worth watching on first live run:
+   - the **`Host` header actually surviving** n8n's request pipeline (axios does pass an explicit
+     `Host` through, but this has not been observed against the real dashboard);
+   - the **error envelope**. The 409 reason is read from three plausible locations and the hints
+     degrade to the server message if the plugin uses a fourth. 403/404/401 hints only need the status
+     code, so they are safe either way.
+2. **The `Host` override is not in the credential's `authenticate`.** A user wiring this credential into
+   a plain HTTP Request node would have to add the header manually. Deliberate (see §1); say the word
+   and it moves.
+3. **No de-duplication.** Delivery is at-least-once and `delivery_id` + `event_id` are both surfaced,
+   but the trigger does not de-duplicate. Same as the existing behaviour for `hooks.outbound`.
+4. **Board is free text, not a dropdown.** The bridge has no list-boards route in PLAN.md.
+5. **`kbctl`'s own routes (`targets test`, `status`, token management) are not exposed** in the node —
+   PLAN.md part B does not list them as operations.
 
 ## What the parent must do
 
-### To unblock the rest of this lane
-
-Re-run the lane with PLAN.md actually appended, or commit it to
-`~/Development/hermes-kanban-bridge/docs/PLAN.md` (where its README already points) and say so. Items
-1-6 above are the minimum set it must answer. Everything already built is independent of those answers
-and does not need redoing.
-
-### To deploy what is built
-
-This branch only changes the trigger's event list, one filter and one output field — it is safe to merge
-and deploy on its own, and needs no bridge plugin present.
+### Deploy
 
 1. Merge `feat/kanban-bridge` into your merged `main` and pull it on the Mac mini.
 2. From the Mac mini's folder: `./n8n-mgmt nodes update dev n8n-nodes-hermes --yes`
 
-### To verify live
+Nothing here needs the plugin to be present: the trigger changes and the resource description load
+fine without it. Only executing a Kanban Task operation needs the bridge running.
 
-No new credential is required — the trigger keeps using the existing **Hermes Outbound Webhook API**
-credential (Base URL optional, Signing Secret required). If you don't have one yet: in n8n, Credentials →
-New → _Hermes Outbound Webhook API_, set **Signing Secret** to a random value of 32+ characters, and put
-that same value in `~/.hermes/.env` as `HERMES_N8N_WEBHOOK_SECRET=…`. Leave Base URL empty unless you
-want the credential test to probe `<base>/health`.
+### Create the credential
 
-Then:
+On the Hermes host, with the plugin enabled in the `default` profile and the dashboard restarted:
 
-1. In n8n, open a Hermes Trigger node and confirm the Events dropdown now lists all eight Kanban entries,
-   that selecting one shows the Kanban notice, and that **Add Filter** offers **Board**.
-2. Add to `~/.hermes/config.yaml` and restart Hermes (gateway or CLI session):
+```bash
+kbctl token create --label n8n-dev --boards <board> --assignees <assignee> --out ~/n8n-dev.token
+```
 
-   ```yaml
-   hooks:
-     outbound:
-       - name: n8n
-         url: "<the node's Production URL>"
-         events: [kanban_task_claimed, kanban_task_completed, on_kanban_task_updated]
-         secret_env: HERMES_N8N_WEBHOOK_SECRET
-         timeout: 10
-   ```
+Then in n8n: **Credentials → New → Hermes Kanban Bridge API**
 
-   The node's setup notice renders this block for whatever events are selected — paste from there so the
-   `events` list matches (unlisted events are never sent).
+- **Base URL**: `http://host.docker.internal:9119` (Docker n8n) or `http://127.0.0.1:9119` (same host)
+- **Host Header**: `127.0.0.1:9119` — leave it at the default
+- **Token**: the `kbb_…` value from `~/n8n-dev.token`
 
-3. Drive a Kanban task through claim → complete on a board and confirm the workflow fires, that
-   `$json.board` is populated and `$json.extra` carries `task_id`/`assignee`/`run_id`, and that setting
-   the Board filter to a _different_ board stops executions (the delivery is still acknowledged 200).
+Press **Test**: it calls `GET /api/plugins/kanban-bridge/v1/health` and a pass proves the token is
+valid, unrevoked and that the `Host` override is accepted.
+
+### Verify the resource live
+
+1. Hermes node → Resource **Kanban Task** → **Create**, Board `<board>`, Title `kbb_test_task_1`.
+   Expect `{task_id, created: true, status}`.
+2. Re-run it with the same **Idempotency Key** under Options → expect `created: false` and the same
+   `task_id`.
+3. **Get** that task; **Comment** on it; **Reprioritize** it to 5; **Assign** it; **Block** then
+   **Unblock** it; **Get Many** with Status `ready`.
+4. Negative checks, which exercise the hints:
+   - a board outside the token's scopes → 403 naming the board and `kbctl token scope`
+   - `task_id` that does not exist → 404 saying task IDs are per board
+   - **Complete** a task that is in `todo` → 409 with the `kanban_db` reason
+   - a token revoked with `kbctl token revoke` → 401 pointing at `kbctl token list`
+5. Finally **Archive** the test task.
+
+### Verify the trigger live
+
+1. Hermes Trigger → Events: select **Any Kanban Event**. Confirm the Kanban-bridge notice appears with
+   the `targets` YAML, and that **Add Filter** offers **Board**. Copy the Production URL.
+2. Put a 32+ character secret in the **default profile's** `.env` as `HERMES_N8N_WEBHOOK_SECRET=…`, add
+   the `targets` block from the notice to the default profile's `config.yaml` (replacing `url`, and
+   narrowing `boards` to the real board), and restart the dashboard.
+3. Create a **Hermes Outbound Webhook** credential whose Signing Secret is that same value, and attach
+   it to the trigger. Leave its Base URL empty.
+4. `kbctl targets test n8n` → the `kanban_bridge_ping` should start one execution, with
+   `$json.event == "kanban_bridge_ping"`.
+5. Drive a task through create → review → approve from the Hermes side and confirm executions for
+   `kanban_task_created`, `kanban_task_review_requested` and `kanban_task_completed`, with
+   `$json.board` populated and `$json.extra` carrying `task_id`, `event_id`, `event_kind`, `title`,
+   `status` and the event `payload`.
+6. Set the Board filter to a **different** board and confirm deliveries stop starting executions while
+   still being acknowledged with HTTP 200 (the ping is dropped too — it carries no board).
 
 ## Proposed (not built)
 
-- **`on_kanban_dispatch_tick` is high-volume** — it fires once per dispatcher tick per board. Worth a
-  warning in its option description, or a default-off guard, once real tick rates are known.
-- **Delivery de-duplication.** `deliveryId` is already surfaced but the trigger never de-duplicates;
-  Hermes retries on connection errors and 5xx. A "Drop Duplicate Deliveries" option with a bounded
-  in-memory LRU of recent `delivery_id`s would make Kanban automations idempotent.
-- **`board` as a `loadOptions` dropdown** instead of free text, once the bridge can list boards.
-- The trigger's `checkExists`/`create`/`delete` are no-ops because `hooks.outbound` has no API. If the
-  bridge's targets config is writable over its REST API, the Kanban path could register itself properly
-  and drop the paste-this-YAML step.
+- **`board` as a `loadOptions` dropdown**, if the bridge gains a list-boards route.
+- **Drop Duplicate Deliveries** option on the trigger — a bounded LRU over `delivery_id` / `event_id`
+  would make Kanban automations idempotent under at-least-once retry.
+- **A Bridge Health operation** (or a System sub-operation) so a workflow can check `scopes` and
+  `token_label` without the credential test.
+- **A warning on `on_kanban_dispatch_tick`**: it fires once per dispatcher tick per board and is by far
+  the highest-volume Kanban option.
+- **Wire the trigger's `create`/`delete` webhook methods to the bridge**, if `targets` ever becomes
+  writable over REST; today they are no-ops and the user pastes YAML.

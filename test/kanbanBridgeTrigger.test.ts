@@ -435,9 +435,13 @@ describe('Kanban bridge: Any Kanban Event wildcard', () => {
 
 	it('passes a bridge delivery of a kind the node does not list when the wildcard is on', () => {
 		expect(
-			getFilterRejection(bridgeEvent('kanban_task_some_future_kind'), {}, {
-				events: [KANBAN_ANY_EVENT],
-			}),
+			getFilterRejection(
+				bridgeEvent('kanban_task_some_future_kind'),
+				{},
+				{
+					events: [KANBAN_ANY_EVENT],
+				},
+			),
 		).toBeNull();
 	});
 });
@@ -458,18 +462,26 @@ describe('Kanban bridge: ping handling', () => {
 
 	it('ignores the ping when only named events are selected', () => {
 		expect(
-			getFilterRejection(pingEvent(), {}, {
-				events: ['kanban_task_review_requested', 'kanban_task_completed'],
-			}),
+			getFilterRejection(
+				pingEvent(),
+				{},
+				{
+					events: ['kanban_task_review_requested', 'kanban_task_completed'],
+				},
+			),
 		).toBe('event "kanban_bridge_ping" not selected');
 	});
 
 	it('drops the ping when a Board filter is set, because it carries no board', () => {
 		expect(
-			getFilterRejection(pingEvent(), {}, {
-				events: [KANBAN_ANY_EVENT],
-				boards: ['acquisitions'],
-			}),
+			getFilterRejection(
+				pingEvent(),
+				{},
+				{
+					events: [KANBAN_ANY_EVENT],
+					boards: ['acquisitions'],
+				},
+			),
 		).toBe('board "" not in filter');
 	});
 
@@ -503,25 +515,37 @@ describe('Kanban bridge: the bridge wire body', () => {
 
 	it('filters a bridge delivery on its top-level board', () => {
 		expect(
-			getFilterRejection(bridgeEvent(), {}, {
-				events: [KANBAN_ANY_EVENT],
-				boards: ['acquisitions'],
-			}),
+			getFilterRejection(
+				bridgeEvent(),
+				{},
+				{
+					events: [KANBAN_ANY_EVENT],
+					boards: ['acquisitions'],
+				},
+			),
 		).toBeNull();
 		expect(
-			getFilterRejection(bridgeEvent(), {}, {
-				events: [KANBAN_ANY_EVENT],
-				boards: ['other-board'],
-			}),
+			getFilterRejection(
+				bridgeEvent(),
+				{},
+				{
+					events: [KANBAN_ANY_EVENT],
+					boards: ['other-board'],
+				},
+			),
 		).toBe('board "acquisitions" not in filter');
 	});
 
 	it('matches the Profile filter against the assignee the bridge sends as profile', () => {
 		expect(
-			getFilterRejection(bridgeEvent(), {}, {
-				events: [KANBAN_ANY_EVENT],
-				profile: 'Deal-Analyst',
-			}),
+			getFilterRejection(
+				bridgeEvent(),
+				{},
+				{
+					events: [KANBAN_ANY_EVENT],
+					profile: 'Deal-Analyst',
+				},
+			),
 		).toBeNull();
 		expect(
 			getFilterRejection(bridgeEvent(), {}, { events: [KANBAN_ANY_EVENT], profile: 'coder' }),
@@ -680,7 +704,9 @@ describe('Kanban bridge: targets config snippet', () => {
 			'post_llm_call',
 			'on_kanban_dispatch_tick',
 		]);
-		expect(yaml).toContain('            events: [kanban_task_review_requested, kanban_task_completed]');
+		expect(yaml).toContain(
+			'            events: [kanban_task_review_requested, kanban_task_completed]',
+		);
 	});
 
 	it('defaults boards to every board', () => {
