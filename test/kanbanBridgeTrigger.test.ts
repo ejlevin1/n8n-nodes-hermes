@@ -8,7 +8,11 @@ import {
 	KANBAN_BRIDGE_EVENTS,
 	KANBAN_EVENTS,
 	KANBAN_HOOK_EVENTS,
+	buildKanbanTargetsYaml,
+	getEventBoard,
 	getFilterRejection,
+	isEventSelected,
+	isKanbanBridgeEvent,
 	normalizeEvent,
 } from '../nodes/HermesTrigger/events';
 import { verifySignature } from '../nodes/HermesTrigger/verifySignature';
@@ -296,7 +300,7 @@ describe('Kanban bridge: normalized output', () => {
 	});
 });
 
-describe('Kanban bridge: webhook with a bridge-shaped body', () => {
+describe('Kanban bridge: webhook with a Hermes hook body', () => {
 	// The signed `timestamp` is checked against the clock, so pin it (as test/trigger.test.ts does).
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -360,5 +364,348 @@ describe('Kanban bridge: webhook with a bridge-shaped body', () => {
 		vi.setSystemTime(NOW + 60 * 60 * 1000);
 		const { result } = await callWebhook({ params: { options: { rejectStaleEvents: false } } });
 		expect(result.workflowData?.[0]).toHaveLength(1);
+	});
+});
+
+/**
+ * A kanban-bridge delivery, exactly as the wire contract in PLAN.md specifies: the
+ * outbound-webhook envelope (`hook_event_name`, `profile`, `delivery_id`, `timestamp`) with the
+ * task coordinates as TOP-LEVEL keys — unlike Hermes hooks, which bury them in `extra`.
+ */
+function bridgeEvent(
+	event = 'kanban_task_review_requested',
+	overrides: IDataObject = {},
+): IDataObject {
+	return {
+		hook_event_name: event,
+		profile: 'deal-analyst',
+		board: 'acquisitions',
+		task_id: 'kbb_test_task_17',
+		event_id: 412,
+		event_kind: event.replace('kanban_task_', ''),
+		run_id: 'kbb_test_run_4',
+		title: 'Review the Q3 rent roll',
+		status: 'review',
+		assignee: 'deal-analyst',
+		priority: 5,
+		actor: 'n8n:kbb_test_label',
+		payload: { reason: 'Unit 12 is missing' },
+		delivery_id: 'kbb_test_delivery_2',
+		timestamp: FRESH,
+		...overrides,
+	};
+}
+
+function pingEvent(overrides: IDataObject = {}): IDataObject {
+	return {
+		hook_event_name: 'kanban_bridge_ping',
+		profile: '',
+		delivery_id: 'kbb_test_delivery_ping',
+		timestamp: FRESH,
+		...overrides,
+	};
+}
+
+describe('Kanban bridge: Any Kanban Event wildcard', () => {
+	it('recognises every kanban_task_* name and the ping as bridge deliveries', () => {
+		expect(isKanbanBridgeEvent('kanban_task_review_requested')).toBe(true);
+		expect(isKanbanBridgeEvent('kanban_task_some_future_kind')).toBe(true);
+		expect(isKanbanBridgeEvent('kanban_bridge_ping')).toBe(true);
+		expect(isKanbanBridgeEvent('on_kanban_task_updated')).toBe(false);
+		expect(isKanbanBridgeEvent('post_llm_call')).toBe(false);
+	});
+
+	it('selects any bridge kind, including kinds this node does not list', () => {
+		expect(isEventSelected('kanban_task_archived', [KANBAN_ANY_EVENT])).toBe(true);
+		expect(isEventSelected('kanban_task_some_future_kind', [KANBAN_ANY_EVENT])).toBe(true);
+		expect(isEventSelected('kanban_bridge_ping', [KANBAN_ANY_EVENT])).toBe(true);
+	});
+
+	it('does not widen the wildcard to Hermes kanban hooks or anything else', () => {
+		expect(isEventSelected('on_kanban_task_updated', [KANBAN_ANY_EVENT])).toBe(false);
+		expect(isEventSelected('on_kanban_dispatch_tick', [KANBAN_ANY_EVENT])).toBe(false);
+		expect(isEventSelected('post_llm_call', [KANBAN_ANY_EVENT])).toBe(false);
+	});
+
+	it('still honours exact selections when the wildcard is not selected', () => {
+		expect(isEventSelected('kanban_task_archived', ['kanban_task_archived'])).toBe(true);
+		expect(isEventSelected('kanban_task_archived', ['kanban_task_created'])).toBe(false);
+		expect(isEventSelected('kanban_task_archived', [])).toBe(false);
+	});
+
+	it('passes a bridge delivery of a kind the node does not list when the wildcard is on', () => {
+		expect(
+			getFilterRejection(bridgeEvent('kanban_task_some_future_kind'), {}, {
+				events: [KANBAN_ANY_EVENT],
+			}),
+		).toBeNull();
+	});
+});
+
+describe('Kanban bridge: ping handling', () => {
+	// The signed `timestamp` is checked against the clock, so pin it (as test/trigger.test.ts does).
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('accepts the ping when Any Kanban Event is selected', () => {
+		expect(getFilterRejection(pingEvent(), {}, { events: [KANBAN_ANY_EVENT] })).toBeNull();
+	});
+
+	it('ignores the ping when only named events are selected', () => {
+		expect(
+			getFilterRejection(pingEvent(), {}, {
+				events: ['kanban_task_review_requested', 'kanban_task_completed'],
+			}),
+		).toBe('event "kanban_bridge_ping" not selected');
+	});
+
+	it('drops the ping when a Board filter is set, because it carries no board', () => {
+		expect(
+			getFilterRejection(pingEvent(), {}, {
+				events: [KANBAN_ANY_EVENT],
+				boards: ['acquisitions'],
+			}),
+		).toBe('board "" not in filter');
+	});
+
+	it('acknowledges an unselected ping with HTTP 200 and no execution', async () => {
+		const body = JSON.stringify(pingEvent());
+		const { result, status } = await callWebhook({
+			body,
+			params: { events: ['kanban_task_completed'] },
+		});
+		expect(status).not.toHaveBeenCalled();
+		expect(result.workflowData).toBeUndefined();
+		expect(result.webhookResponse).toMatchObject({ received: true, ignored: true });
+	});
+
+	it('starts the workflow for a signed ping when the wildcard is selected', async () => {
+		const body = JSON.stringify(pingEvent());
+		const { result } = await callWebhook({ body, params: { events: [KANBAN_ANY_EVENT] } });
+		const items = result.workflowData?.[0] ?? [];
+		expect(items).toHaveLength(1);
+		expect(items[0].json.event).toBe('kanban_bridge_ping');
+	});
+});
+
+describe('Kanban bridge: the bridge wire body', () => {
+	it('reads the board from the top level, where the bridge puts it', () => {
+		expect(getEventBoard(bridgeEvent())).toBe('acquisitions');
+		// Hermes hooks keep it in extra; both must work.
+		expect(getEventBoard(kanbanEvent())).toBe('main');
+		expect(getEventBoard({ hook_event_name: 'post_llm_call' })).toBeNull();
+	});
+
+	it('filters a bridge delivery on its top-level board', () => {
+		expect(
+			getFilterRejection(bridgeEvent(), {}, {
+				events: [KANBAN_ANY_EVENT],
+				boards: ['acquisitions'],
+			}),
+		).toBeNull();
+		expect(
+			getFilterRejection(bridgeEvent(), {}, {
+				events: [KANBAN_ANY_EVENT],
+				boards: ['other-board'],
+			}),
+		).toBe('board "acquisitions" not in filter');
+	});
+
+	it('matches the Profile filter against the assignee the bridge sends as profile', () => {
+		expect(
+			getFilterRejection(bridgeEvent(), {}, {
+				events: [KANBAN_ANY_EVENT],
+				profile: 'Deal-Analyst',
+			}),
+		).toBeNull();
+		expect(
+			getFilterRejection(bridgeEvent(), {}, { events: [KANBAN_ANY_EVENT], profile: 'coder' }),
+		).toBe('profile "deal-analyst" does not match filter');
+	});
+
+	it('folds the bridge task coordinates into extra, so both sources read alike', () => {
+		const item = normalizeEvent(bridgeEvent());
+		expect(item.event).toBe('kanban_task_review_requested');
+		expect(item.board).toBe('acquisitions');
+		expect(item.profile).toBe('deal-analyst');
+		expect(item.extra).toEqual({
+			board: 'acquisitions',
+			task_id: 'kbb_test_task_17',
+			event_id: 412,
+			event_kind: 'review_requested',
+			run_id: 'kbb_test_run_4',
+			title: 'Review the Q3 rent roll',
+			status: 'review',
+			assignee: 'deal-analyst',
+			priority: 5,
+			actor: 'n8n:kbb_test_label',
+			payload: { reason: 'Unit 12 is missing' },
+		});
+		expect(item.deliveryId).toBe('kbb_test_delivery_2');
+		expect(item.timestamp).toBe(FRESH);
+	});
+
+	it('omits bridge keys the delivery left out instead of filling in nulls', () => {
+		const item = normalizeEvent(
+			bridgeEvent('kanban_task_created', { actor: null, run_id: null, payload: {} }),
+		);
+		expect(item.extra).not.toHaveProperty('actor');
+		expect(item.extra).not.toHaveProperty('run_id');
+		expect(item.extra.payload).toEqual({});
+	});
+
+	it('lets an explicit extra in the body win over the folded keys', () => {
+		const item = normalizeEvent(bridgeEvent('kanban_task_created', { extra: { status: 'todo' } }));
+		expect(item.extra.status).toBe('todo');
+		expect(item.extra.task_id).toBe('kbb_test_task_17');
+	});
+
+	it('does not fold anything for a Hermes hook delivery', () => {
+		const item = normalizeEvent(kanbanEvent());
+		expect(item.extra).toEqual({
+			task_id: 'kbb_test_task_17',
+			board: 'main',
+			assignee: 'Alex Example',
+			run_id: 'kbb_test_run_4',
+			profile_name: 'default',
+		});
+		expect(item.extra).not.toHaveProperty('event_id');
+	});
+
+	it('leaves a ping with an empty extra and no board', () => {
+		const item = normalizeEvent(pingEvent());
+		expect(item.extra).toEqual({});
+		expect(item.board).toBeNull();
+		expect(item.profile).toBeNull();
+	});
+});
+
+describe('Kanban bridge: webhook with the bridge wire body', () => {
+	// The signed `timestamp` is checked against the clock, so pin it (as test/trigger.test.ts does).
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('verifies the bridge signature with the Hermes outbound scheme', async () => {
+		const body = JSON.stringify(bridgeEvent());
+		expect(verifySignature(SECRET, Buffer.from(body, 'utf8'), sign(body))).toBe(true);
+		const { result, status } = await callWebhook({
+			body,
+			params: { events: [KANBAN_ANY_EVENT] },
+		});
+		expect(status).not.toHaveBeenCalled();
+		const items = result.workflowData?.[0] ?? [];
+		expect(items[0].json.event).toBe('kanban_task_review_requested');
+		expect(items[0].json.board).toBe('acquisitions');
+		expect((items[0].json.extra as IDataObject).task_id).toBe('kbb_test_task_17');
+	});
+
+	it('rejects a tampered bridge body with HTTP 401', async () => {
+		const body = JSON.stringify(bridgeEvent());
+		const tampered = body.replace('acquisitions', 'other-board');
+		const { status } = await callWebhook({
+			body: tampered,
+			signature: sign(body),
+			params: { events: [KANBAN_ANY_EVENT] },
+		});
+		expect(status).toHaveBeenCalledWith(401);
+	});
+
+	it('starts for each bridge-only kind when it is selected by name', async () => {
+		for (const event of [
+			'kanban_task_created',
+			'kanban_task_review_requested',
+			'kanban_task_changes_requested',
+			'kanban_task_unblocked',
+			'kanban_task_archived',
+		]) {
+			const { result } = await callWebhook({
+				body: JSON.stringify(bridgeEvent(event)),
+				params: { events: [event] },
+			});
+			expect(result.workflowData?.[0]?.[0].json.event).toBe(event);
+		}
+	});
+
+	it('acknowledges a bridge delivery for another board without starting the workflow', async () => {
+		const { result, status } = await callWebhook({
+			body: JSON.stringify(bridgeEvent()),
+			params: { events: [KANBAN_ANY_EVENT], filters: { boards: 'other-board' } },
+		});
+		expect(status).not.toHaveBeenCalled();
+		expect(result.workflowData).toBeUndefined();
+		expect(result.webhookResponse).toMatchObject({ received: true, ignored: true });
+	});
+});
+
+describe('Kanban bridge: targets config snippet', () => {
+	it('emits the plugin settings path, not hooks.outbound', () => {
+		const yaml = buildKanbanTargetsYaml('<url>', [KANBAN_ANY_EVENT]);
+		expect(yaml).toContain('plugins:');
+		expect(yaml).toContain('  entries:');
+		expect(yaml).toContain('    kanban-bridge:');
+		expect(yaml).toContain('      settings:');
+		expect(yaml).toContain('        targets:');
+		expect(yaml).not.toContain('hooks:');
+		expect(yaml).not.toContain('outbound:');
+	});
+
+	it('uses the target keys from the wire contract and references the secret by env var', () => {
+		const yaml = buildKanbanTargetsYaml('https://n8n.example/webhook/hermes', [KANBAN_ANY_EVENT], {
+			name: 'n8n-dev',
+			boards: ['acquisitions'],
+		});
+		expect(yaml).toContain('          - name: n8n-dev');
+		expect(yaml).toContain('            url: "https://n8n.example/webhook/hermes"');
+		expect(yaml).toContain('            boards: ["acquisitions"]');
+		expect(yaml).toContain('            events: ["*"]');
+		expect(yaml).toContain('            secret_env: HERMES_N8N_WEBHOOK_SECRET');
+		// The secret itself is never written into the snippet.
+		expect(yaml).not.toContain(SECRET);
+	});
+
+	it('lists the selected bridge events and ignores non-bridge selections', () => {
+		const yaml = buildKanbanTargetsYaml('<url>', [
+			'kanban_task_review_requested',
+			'kanban_task_completed',
+			'post_llm_call',
+			'on_kanban_dispatch_tick',
+		]);
+		expect(yaml).toContain('            events: [kanban_task_review_requested, kanban_task_completed]');
+	});
+
+	it('defaults boards to every board', () => {
+		expect(buildKanbanTargetsYaml('<url>', [KANBAN_ANY_EVENT])).toContain(
+			'            boards: ["*"]',
+		);
+	});
+
+	it('is rendered in a Kanban-bridge-only notice that points away from hooks.outbound', () => {
+		const description = new HermesTrigger().description;
+		const notice = description.properties.find((p) => p.name === 'kanbanBridgeNotice');
+		expect(notice?.type).toBe('notice');
+		expect(notice?.displayOptions?.show?.events).toEqual(KANBAN_BRIDGE_EVENTS);
+		expect(String(notice?.displayName)).toContain('plugins.entries.kanban-bridge.settings.targets');
+		expect(String(notice?.displayName)).toMatch(/not<\/i> <code>hooks.outbound/);
+		expect(String(notice?.displayName)).toContain('kanban_bridge_ping');
+		expect(String(notice?.displayName)).toContain('        targets:');
+	});
+
+	it('keeps the hooks.outbound notice but sends Kanban users to the bridge one', () => {
+		const description = new HermesTrigger().description;
+		const setup = String(
+			description.properties.find((p) => p.name === 'setupNotice')?.displayName ?? '',
+		);
+		expect(setup).toContain('hooks:');
+		expect(setup).toMatch(/do not come\s+from <code>hooks.outbound/);
 	});
 });
