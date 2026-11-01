@@ -151,6 +151,18 @@ describe('Kanban Task: description shape', () => {
 		expect(names).toContain('Priority');
 	});
 
+	it('refuses decimals on every integer field, because the bridge models them as int', () => {
+		const createOptions = (property('createOptions')?.options ?? []) as Array<{
+			name: string;
+			typeOptions?: { numberPrecision?: number };
+		}>;
+		for (const name of ['priority', 'maxRuntimeSeconds']) {
+			const field = createOptions.find((o) => o.name === name);
+			expect(field?.typeOptions?.numberPrecision, name).toBe(0);
+		}
+		expect(property('priority')?.typeOptions?.numberPrecision).toBe(0);
+	});
+
 	it('caps the Get Many Limit at the bridge maximum', () => {
 		const limit = property('limit');
 		expect(limit?.typeOptions?.maxValue).toBe(KANBAN_LIST_MAX_LIMIT);
@@ -600,6 +612,22 @@ describe('Kanban Task: error hints', () => {
 		expect(hint?.description).toMatch(/review/);
 	});
 
+	it('409 surfaces the reason from the plugin’s real {detail: "<string>"} envelope', () => {
+		const hint = kanbanBridgeErrorMessage(
+			409,
+			{ detail: 'complete refused: parent dependencies are not satisfied' },
+			{ board: 'acquisitions', taskId: 'kbb_test_task_9' },
+		);
+		expect(hint?.message).toMatch(/parent dependencies are not satisfied/);
+	});
+
+	it('409 surfaces a FastAPI detail string for a blocked-or-scheduled refusal', () => {
+		const hint = kanbanBridgeErrorMessage(409, {
+			detail: 'unblock refused: task is not blocked or scheduled',
+		});
+		expect(hint?.message).toMatch(/task is not blocked or scheduled/);
+	});
+
 	it('reads the 409 reason wherever the bridge puts it, and falls back to the message', () => {
 		expect(extractTransitionReason({ reason: 'a' })).toBe('a');
 		expect(extractTransitionReason({ error: { reason: 'b' } })).toBe('b');
@@ -613,6 +641,13 @@ describe('Kanban Task: error hints', () => {
 		const hint = kanbanBridgeErrorMessage(400, { detail: 'board is required' });
 		expect(hint?.message).toMatch(/board is required/);
 		expect(hint?.description).toMatch(/Board and Title/);
+	});
+
+	it('422 gets the same field hint, because pydantic rejects before the plugin handler runs', () => {
+		const hint = kanbanBridgeErrorMessage(422, {
+			detail: [{ loc: ['body', 'priority'], msg: 'Input should be a valid integer' }],
+		});
+		expect(hint?.description).toMatch(/whole numbers/);
 	});
 
 	it('leaves statuses it has nothing to add for to the shared normaliser', () => {

@@ -76,6 +76,11 @@ function asObject(value: unknown): IDataObject {
 /**
  * The bridge reports an illegal transition with the reason `kanban_db` gave. Accept it either
  * top-level, nested under `error`, or inside `detail` (FastAPI's default envelope).
+ *
+ * The shipped plugin raises `HTTPException(detail=<string>)`, which carries no `reason` key, so
+ * today every 409 reason arrives via the `server` fallback in `kanbanBridgeErrorMessage`. The
+ * three-envelope search is kept as cheap, deliberate defence against the plugin later returning a
+ * structured body.
  */
 export function extractTransitionReason(body: unknown): string | undefined {
 	const envelopes = [body, asObject(body).error, asObject(body).detail];
@@ -94,7 +99,7 @@ function describeTarget(ctx: KanbanBridgeErrorContext): string {
 }
 
 /**
- * Friendly messages for the bridge's own failures: 400 validation, 401 token, 403 scope,
+ * Friendly messages for the bridge's own failures: 400/422 validation, 401 token, 403 scope,
  * 404 unknown task and 409 illegal transition. Returns undefined when the shared Hermes
  * normaliser already explains the status.
  */
@@ -108,7 +113,9 @@ export function kanbanBridgeErrorMessage(
 	const target = describeTarget(ctx);
 	const serverSuffix = server ? ` ${server}` : '';
 
-	if (statusCode === 400) {
+	// 422 is FastAPI's own pydantic error, raised before the plugin's handler runs (e.g. a
+	// non-integer Priority); it needs the same field hint as the plugin's own 400.
+	if (statusCode === 400 || statusCode === 422) {
 		return {
 			message: `The Kanban Bridge rejected the request as invalid${server ? `: ${server}` : ''}`,
 			description:

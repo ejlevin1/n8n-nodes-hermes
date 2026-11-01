@@ -400,6 +400,7 @@ function pingEvent(overrides: IDataObject = {}): IDataObject {
 	return {
 		hook_event_name: 'kanban_bridge_ping',
 		profile: '',
+		board: 'acquisitions',
 		delivery_id: 'kbb_test_delivery_ping',
 		timestamp: FRESH,
 		...overrides,
@@ -472,7 +473,7 @@ describe('Kanban bridge: ping handling', () => {
 		).toBe('event "kanban_bridge_ping" not selected');
 	});
 
-	it('drops the ping when a Board filter is set, because it carries no board', () => {
+	it('passes the ping through a Board filter matching the target’s board', () => {
 		expect(
 			getFilterRejection(
 				pingEvent(),
@@ -482,7 +483,20 @@ describe('Kanban bridge: ping handling', () => {
 					boards: ['acquisitions'],
 				},
 			),
-		).toBe('board "" not in filter');
+		).toBeNull();
+	});
+
+	it('drops a wildcard target’s ping when a named Board filter is set', () => {
+		expect(
+			getFilterRejection(
+				pingEvent({ board: '*' }),
+				{},
+				{
+					events: [KANBAN_ANY_EVENT],
+					boards: ['acquisitions'],
+				},
+			),
+		).toBe('board "*" not in filter');
 	});
 
 	it('acknowledges an unselected ping with HTTP 200 and no execution', async () => {
@@ -601,11 +615,16 @@ describe('Kanban bridge: the bridge wire body', () => {
 		expect(item.extra).not.toHaveProperty('event_id');
 	});
 
-	it('leaves a ping with an empty extra and no board', () => {
+	it('folds a ping’s board into extra and leaves it task-less', () => {
 		const item = normalizeEvent(pingEvent());
-		expect(item.extra).toEqual({});
-		expect(item.board).toBeNull();
+		expect(item.extra).toEqual({ board: 'acquisitions' });
+		expect(item.board).toBe('acquisitions');
 		expect(item.profile).toBeNull();
+	});
+
+	it('keeps a wildcard target’s ping board as "*"', () => {
+		const item = normalizeEvent(pingEvent({ board: '*' }));
+		expect(item.board).toBe('*');
 	});
 });
 

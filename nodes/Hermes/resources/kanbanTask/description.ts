@@ -82,7 +82,7 @@ export const kanbanTaskOperations: INodeProperties = {
 		{
 			name: 'Get Many',
 			value: 'getAll',
-			description: `List the tasks on a board, newest priority first (at most ${KANBAN_LIST_MAX_LIMIT})`,
+			description: `List the tasks on a board, highest priority first and oldest first within a priority (at most ${KANBAN_LIST_MAX_LIMIT})`,
 			action: 'Get many kanban tasks',
 		},
 		{
@@ -184,7 +184,7 @@ export const kanbanTaskFields: INodeProperties[] = [
 				displayName: 'Max Runtime (Seconds)',
 				name: 'maxRuntimeSeconds',
 				type: 'number',
-				typeOptions: { minValue: 1 },
+				typeOptions: { minValue: 1, numberPrecision: 0 },
 				default: 1800,
 				description:
 					'Cap on one worker run before the dispatcher stops it and re-queues the task. Leave unset for the board default.',
@@ -202,6 +202,7 @@ export const kanbanTaskFields: INodeProperties[] = [
 				displayName: 'Priority',
 				name: 'priority',
 				type: 'number',
+				typeOptions: { numberPrecision: 0 },
 				default: 0,
 				description: priorityDescription,
 			},
@@ -348,6 +349,7 @@ export const kanbanTaskFields: INodeProperties[] = [
 		displayName: 'Priority',
 		name: 'priority',
 		type: 'number',
+		typeOptions: { numberPrecision: 0 },
 		required: true,
 		default: 0,
 		displayOptions: show(['reprioritize']),

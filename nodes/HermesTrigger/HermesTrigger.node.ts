@@ -62,13 +62,17 @@ const APPROVAL_EVENTS_NOTICE =
 	'approvals after <code>approvals.timeout</code> (default 300 s).';
 
 const KANBAN_EVENTS_NOTICE =
-	'Kanban events carry their task coordinates in <code>extra</code> ' +
+	'Task-scoped Kanban events carry their task coordinates in <code>extra</code> ' +
 	'(<code>task_id</code>, <code>board</code>, <code>assignee</code>, <code>run_id</code>, and for ' +
 	'bridge deliveries also <code>event_id</code>, <code>event_kind</code>, <code>title</code>, ' +
 	'<code>status</code>, <code>priority</code>, <code>actor</code> and the event’s own ' +
-	'<code>payload</code>); <code>board</code> is also surfaced top-level. Use the Board filter ' +
-	'below to watch a single board. Note that <code>on_kanban_task_updated</code> reports ' +
-	'<code>changed_fields</code> as field names only, never their values.';
+	'<code>payload</code>); <code>board</code> is also surfaced top-level. ' +
+	'<code>on_kanban_dispatch_tick</code> is board-scoped and carries no task. Use the Board filter ' +
+	'below to watch a single board — prefer it over Profile above, because on bridge deliveries ' +
+	'<code>profile</code> is the task’s assignee rather than a Hermes profile, so a Profile ' +
+	'filter set to a Hermes profile silently drops every bridge event. Note that ' +
+	'<code>on_kanban_task_updated</code> reports <code>changed_fields</code> as field names only, ' +
+	'never their values.';
 
 const KANBAN_BRIDGE_NOTICE =
 	'<b>Kanban bridge setup:</b> <code>kanban_task_*</code> events are pushed by the ' +
@@ -83,8 +87,9 @@ const KANBAN_BRIDGE_NOTICE =
 	'then restart the dashboard. Signing is identical to Hermes outbound webhooks, so this node ' +
 	'verifies both the same way. Check it end to end with <code>kbctl targets test &lt;name&gt;</code>: ' +
 	'that sends a <code>kanban_bridge_ping</code>, which only starts the workflow when <b>Any Kanban ' +
-	'Event</b> is selected (and no Board filter is set, since a ping carries no board) — ' +
-	'otherwise it is acknowledged with HTTP 200 and ignored.' +
+	'Event</b> is selected — otherwise it is acknowledged with HTTP 200 and ignored. The ping ' +
+	'carries the target’s board (or <code>*</code> for a wildcard target), so a Board filter may ' +
+	'drop it too.' +
 	`<pre>${KANBAN_TARGETS_YAML}</pre>`;
 
 function reject(this: IWebhookFunctions, status: number): IWebhookResponseData {

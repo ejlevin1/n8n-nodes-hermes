@@ -228,6 +228,8 @@ Uses the [Hermes Kanban Bridge](#hermes-kanban-bridge) credential. Every operati
 | **Reprioritize**       | `tasks/action`  | Task ID, Priority (whole number; higher is dispatched first)                                                                 |
 | **Edit**               | `tasks/action`  | Task ID; Fields to Edit: Body, Title (at least one)                                                                          |
 
+**Get Many** returns the board's tasks highest priority first and oldest first within a priority (`priority DESC, created_at ASC`). `tasks/list` takes no offset or cursor and caps at 200, so there is nothing to page through and the operation has a plain **Limit** rather than a **Return All**.
+
 **Create** is idempotent when you set an **Idempotency Key**: an existing non-archived task with the same key is returned instead of a duplicate, and the response has `created: false`. Statuses are `triage`, `todo`, `scheduled`, `ready`, `running`, `blocked`, `review`, `done` and `archived`.
 
 Bridge-specific errors get their own messages: **401** points at the token and `kbctl token list`; **403** names the board / assignee / action that fell outside the token's scopes; **404** reminds you that task IDs are per board; **409** shows the transition reason `kanban_db` gave (for example completing a task that is in `todo`, not `review`). An unreachable bridge explains that the plugin only answers in the dashboard process.
@@ -290,7 +292,7 @@ Kanban events reach n8n from **two** sources, and the node treats them the same 
 
 Hermes fires **no hook** for review-requested, changes-requested, archived, unblocked or created, so those only ever arrive through the bridge, which tails the `task_events` table in the dashboard process. The shared names (`claimed`, `completed`, `blocked`) are identical, so one selected event matches either source. Signing is the same scheme in both cases, so the trigger verifies both with the same credential.
 
-**Any Kanban Event** is a wildcard that matches every `kanban_task_*` delivery — including kinds the plugin adds later — plus the `kanban_bridge_ping` that `kbctl targets test <name>` sends. With any other selection the ping is acknowledged with HTTP 200 and ignored; note that a ping carries no board, so a Board filter drops it too.
+**Any Kanban Event** is a wildcard that matches every `kanban_task_*` delivery — including kinds the plugin adds later — plus the `kanban_bridge_ping` that `kbctl targets test <name>` sends. With any other selection the ping is acknowledged with HTTP 200 and ignored. The ping carries the target's board (the first named board in its `boards` list, or `*` for a wildcard target), so a Board filter may drop it too.
 
 Select a Kanban bridge event and the node shows a ready-to-paste `targets` block:
 
@@ -309,7 +311,7 @@ plugins:
 
 The secret lives in the default profile's `.env` under the name given by `secret_env`, never inline. Restart the dashboard after editing the config.
 
-**Where the task fields land.** Hermes hooks pass the task coordinates as hook kwargs, so they arrive inside `extra`. The bridge sends them top-level instead, and the node folds them into `extra` so a workflow reads `extra.task_id` whichever source delivered the event (an explicit `extra` in the body still wins). `board` is also surfaced top-level (like `platform`) so the Board filter is easy to pair with an expression. Bridge deliveries add `event_id`, `event_kind`, `title`, `status`, `priority`, `actor` and the event's own `payload` (for example `{reason: …}` or `{summary: …}`) to `extra`; `profile` holds the task's assignee. `event_id` and `deliveryId` together let you de-duplicate at-least-once deliveries downstream.
+**Where the task fields land.** Hermes hooks pass the task coordinates as hook kwargs, so they arrive inside `extra`. The bridge sends them top-level instead, and the node folds them into `extra` so a workflow reads `extra.task_id` whichever source delivered the event (an explicit `extra` in the body still wins). `board` is also surfaced top-level (like `platform`) so the Board filter is easy to pair with an expression. Bridge deliveries add `event_id`, `event_kind`, `title`, `status`, `priority`, `actor` and the event's own `payload` (for example `{reason: …}` or `{summary: …}`) to `extra`; `profile` holds the task's assignee — so the trigger's **Profile** filter means something different here than for a Hermes hook, and setting it to a Hermes profile silently drops every bridge event; prefer the **Board** filter and leave Profile empty. `event_id` and `deliveryId` together let you de-duplicate at-least-once deliveries downstream.
 
 Per-event additions for the Hermes hooks:
 
