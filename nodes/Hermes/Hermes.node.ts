@@ -52,7 +52,7 @@ export class Hermes implements INodeType {
 				required: true,
 				displayOptions: {
 					hide: {
-						resource: ['webhookRoute'],
+						resource: ['webhookRoute', 'kanbanTask'],
 					},
 				},
 			},
@@ -62,6 +62,15 @@ export class Hermes implements INodeType {
 				displayOptions: {
 					show: {
 						resource: ['webhookRoute'],
+					},
+				},
+			},
+			{
+				name: 'hermesKanbanBridgeApi',
+				required: true,
+				displayOptions: {
+					show: {
+						resource: ['kanbanTask'],
 					},
 				},
 			},

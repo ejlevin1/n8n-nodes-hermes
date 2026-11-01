@@ -4,7 +4,10 @@ import type { IDataObject, IWebhookFunctions } from 'n8n-workflow';
 import { HermesTrigger } from '../nodes/HermesTrigger/HermesTrigger.node';
 import {
 	HERMES_TRIGGER_EVENT_VALUES,
+	KANBAN_ANY_EVENT,
+	KANBAN_BRIDGE_EVENTS,
 	KANBAN_EVENTS,
+	KANBAN_HOOK_EVENTS,
 	getFilterRejection,
 	normalizeEvent,
 } from '../nodes/HermesTrigger/events';
@@ -95,7 +98,7 @@ async function callWebhook(opts: CallOptions = {}) {
 describe('Kanban bridge: trigger event catalogue', () => {
 	it('exposes every Kanban hook from Hermes VALID_HOOKS', () => {
 		// hermes_cli/plugins.py:108 VALID_HOOKS — the Kanban task + worker/dispatch observers.
-		expect([...KANBAN_EVENTS].sort()).toEqual(
+		expect([...KANBAN_HOOK_EVENTS].sort()).toEqual(
 			[
 				'kanban_task_blocked',
 				'kanban_task_claimed',
@@ -107,6 +110,39 @@ describe('Kanban bridge: trigger event catalogue', () => {
 				'on_kanban_worker_stale_claim',
 			].sort(),
 		);
+	});
+
+	it('covers both delivery sources in KANBAN_EVENTS, without duplicating the shared names', () => {
+		// claimed/completed/blocked arrive from either source under the same name, so the union
+		// must list each exactly once.
+		expect(new Set(KANBAN_EVENTS).size).toBe(KANBAN_EVENTS.length);
+		for (const event of [...KANBAN_HOOK_EVENTS, ...KANBAN_BRIDGE_EVENTS]) {
+			expect(KANBAN_EVENTS).toContain(event);
+		}
+		for (const shared of ['kanban_task_claimed', 'kanban_task_completed', 'kanban_task_blocked']) {
+			expect(KANBAN_HOOK_EVENTS).toContain(shared);
+			expect(KANBAN_BRIDGE_EVENTS).toContain(shared);
+		}
+	});
+
+	it('offers the bridge-only kinds Hermes fires no hook for', () => {
+		for (const event of [
+			'kanban_task_created',
+			'kanban_task_review_requested',
+			'kanban_task_changes_requested',
+			'kanban_task_unblocked',
+			'kanban_task_archived',
+		]) {
+			expect(KANBAN_BRIDGE_EVENTS).toContain(event);
+			expect(KANBAN_HOOK_EVENTS).not.toContain(event);
+			expect(HERMES_TRIGGER_EVENT_VALUES).toContain(event);
+		}
+	});
+
+	it('offers the Any Kanban Event wildcard', () => {
+		expect(KANBAN_ANY_EVENT).toBe('kanban_task_*');
+		expect(KANBAN_BRIDGE_EVENTS).toContain(KANBAN_ANY_EVENT);
+		expect(HERMES_TRIGGER_EVENT_VALUES).toContain(KANBAN_ANY_EVENT);
 	});
 
 	it('registers each Kanban event in the selectable Events list', () => {
