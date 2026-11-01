@@ -5,6 +5,10 @@ STATUS: READY-FOR-LIVE
 Branch: `feat/kanban-bridge` (pushed to `origin`). Worktree: `~/Development/n8n-nodes-hermes.wt/kb-node`.
 Package version **not** bumped (still 0.1.0); everything is under `## Unreleased` in CHANGELOG.md.
 
+The independent review (`kb-node-review`, VERDICT: CHANGES-REQUIRED at `d71b0c0`) has been
+addressed in full — see "Review round 1 fixes" below. One major finding (N1, a real status the node
+could not express) and eight minor/nits; the wire contract needed no change.
+
 PLAN.md was delivered on the `kb-node-2` continuation. Part B is now complete: the credential, the
 Kanban Task resource with all twelve operations, the error hints, the new trigger events, the Board
 filter and the targets-config snippet. Everything the first session had built from guesses was
@@ -143,18 +147,22 @@ existing `## Unreleased`, plus the two amended ones.
 
 | Gate                                | Result                                   |
 | ----------------------------------- | ---------------------------------------- |
-| `npx vitest run`                    | **17 files, 345 tests passed**, 0 failed |
+| `npx vitest run`                    | **17 files, 351 tests passed**, 0 failed |
 | `npx tsc --noEmit -p tsconfig.json` | exit 0, no diagnostics                   |
 | `npm run lint`                      | exit 0, no errors or warnings            |
 | `npm run build`                     | exit 0, "Build successful"               |
 
-Baseline at the start of this session was 15 files / 264 tests; the new work adds 81 tests in two new
-files plus 24 appended to the existing Kanban trigger file, and changed nothing behaviourally in the
-other resources. Test counts by new/changed file:
+Baseline at the start of the build session was 15 files / 264 tests; the new work adds 87 tests in two
+new files plus 30 appended to the existing Kanban trigger file, and changed nothing behaviourally in
+the other resources. Test counts by new/changed file (review round 1 added 6):
 
 - `test/kanbanBridgeCredential.test.ts` — 10 (new)
-- `test/kanbanBridgeTask.test.ts` — 43 (new)
-- `test/kanbanBridgeTrigger.test.ts` — 57 (was 29)
+- `test/kanbanBridgeTask.test.ts` — 47 (new; 43 before round 1)
+- `test/kanbanBridgeTrigger.test.ts` — 59 (was 29; 57 before round 1)
+
+Round 1 re-ran every gate on the final tree: `npx eslint nodes credentials --ext .ts` is also exit 0,
+`npm run build` emits `dist/credentials/HermesKanbanBridgeApi.credentials.js`, and
+`npx prettier --check` is clean on all six changed files.
 
 Prettier was run only on the files touched. Two exceptions, both pre-existing: `Hermes.node.json` and
 `HermesTrigger.node.json` are not prettier-conformant on `main` either (prettier wants
@@ -198,6 +206,17 @@ kept. Its "PLAN.md missing" deviation is resolved and removed.
 4. **Create's Max Runtime (Seconds) shows a default of 1800 in the collection UI.** Collection options
    need a `default`; it is only sent when the user adds the field, so an untouched Create still omits
    `max_runtime_seconds` and the board default applies.
+5. **PLAN.md's "Statuses:" line omits `scheduled`; the node follows the source instead.** PLAN.md lists
+   eight statuses (`triage`, `todo`, `ready`, `running`, `blocked`, `review`, `done`, `archived`). The
+   real set is nine: `DEFAULT_WORKFLOW.columns` includes `Column("scheduled", "Scheduled", "⏱",
+drag_target=False)` between `todo` and `ready`, and `DEFAULT_STATUSES =
+frozenset(DEFAULT_WORKFLOW.keys()) | {ARCHIVED}` — `hermes_cli/kanban_workflow.py:114-142`. It is
+   persisted, not cosmetic: `kanban_db.py:3878` writes `SET status = 'scheduled'` and `unblock_task`
+   resumes out of it (`kanban_db.py:3589`, `WHERE id = ? AND status IN ('blocked', 'scheduled')`).
+   Because `kanban_db.py:1427` validates the `status` filter against `VALID_STATUSES`, the bridge
+   already accepted `status: "scheduled"` on `v1/tasks/list` — only Get Many could not express it.
+   The first session followed PLAN.md here and did not record the deviation; found by `kb-node-review`
+   as N1 and fixed in `3727b4e`. `KANBAN_STATUSES` is now in dashboard column order.
 
 ## Known gaps
 
@@ -205,9 +224,11 @@ kept. Its "PLAN.md missing" deviation is resolved and removed.
    runs against fakes shaped by the wire contract. The parts most worth watching on first live run:
    - the **`Host` header actually surviving** n8n's request pipeline (axios does pass an explicit
      `Host` through, but this has not been observed against the real dashboard);
-   - the **error envelope**. The 409 reason is read from three plausible locations and the hints
-     degrade to the server message if the plugin uses a fourth. 403/404/401 hints only need the status
-     code, so they are safe either way.
+   - the **error envelope**. The shipped plugin raises `HTTPException(detail=<str>)`, so the reason
+     reaches the user through `normalizeHermesError`'s `detail` branch and the `server` fallback, not
+     through `extractTransitionReason`; round 1 added tests for that real path (N3). The
+     three-envelope search is kept as defence if the plugin later returns a structured body.
+     403/404/401 hints only need the status code, so they are safe either way.
 2. **The `Host` override is not in the credential's `authenticate`.** A user wiring this credential into
    a plain HTTP Request node would have to add the header manually. Deliberate (see §1); say the word
    and it moves.
@@ -251,7 +272,8 @@ valid, unrevoked and that the `Host` override is accepted.
 2. Re-run it with the same **Idempotency Key** under Options → expect `created: false` and the same
    `task_id`.
 3. **Get** that task; **Comment** on it; **Reprioritize** it to 5; **Assign** it; **Block** then
-   **Unblock** it; **Get Many** with Status `ready`.
+   **Unblock** it; **Get Many** with Status `ready`, then again with Status **Scheduled** — that
+   option only exists after the N1 fix, and should return 200 (an empty list is fine).
 4. Negative checks, which exercise the hints:
    - a board outside the token's scopes → 403 naming the board and `kbctl token scope`
    - `task_id` that does not exist → 404 saying task IDs are per board
@@ -275,7 +297,49 @@ valid, unrevoked and that the `Host` override is accepted.
    `$json.board` populated and `$json.extra` carrying `task_id`, `event_id`, `event_kind`, `title`,
    `status` and the event `payload`.
 6. Set the Board filter to a **different** board and confirm deliveries stop starting executions while
-   still being acknowledged with HTTP 200 (the ping is dropped too — it carries no board).
+   still being acknowledged with HTTP 200. **The ping behaves differently from what the first draft of
+   this report said:** `ping_payload` always carries a board — the target's first named board, else
+   `*` (`plugin/core/events.py:131-149`, `plugin/scripts/kbctl.py:286`). So with `boards: [<real
+board>]` in the target, a Board filter set to that board will **start** an execution for the ping;
+   only a wildcard target's `board: "*"` is dropped by a named filter. Expect that, not silence (N2).
+
+7. **Watch the `Host` override on the first live call** — the one thing no unit test can reach. The
+   credential **Test** button is the cheapest proof: it sends `Host: ={{$credentials.hostHeader}}`
+   explicitly (`credentials/HermesKanbanBridgeApi.credentials.ts:71-78`), while `authenticate`
+   deliberately does not carry it. If Test passes from the Docker n8n, every resource call will too. If
+   it fails, compare against `curl -H 'Host: 127.0.0.1:9119' http://host.docker.internal:9119/…health`
+   from inside the n8n container to separate "n8n dropped the header" from "the dashboard refused".
+
+## Review round 1 fixes
+
+`kb-node-review` reviewed `d71b0c0` and returned CHANGES-REQUIRED: one major (N1) and eight
+minor/nits. All nine are addressed in two commits. No feature, policy or wire-contract change — the
+reviewer confirmed routes, bodies and event names/keys already match the plugin, and they are
+untouched.
+
+| id  | sev   | fix                                                                                                                                                                                                                                                                                                                 | commit    |
+| --- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| N1  | major | `scheduled` added to `KANBAN_STATUSES` after `todo` (dashboard column order), so Get Many's Status filter can select it; 409 hint text and README enumerate all nine; test assertion updated; PLAN.md deviation recorded above with the `kanban_workflow.py:114-142` citation.                                      | `3727b4e` |
+| N2  | minor | `pingEvent` fixture now carries `board: 'acquisitions'` with a second `board: '*'` case; the board-filter test was asserting against a body the bridge never sends. Notice, README and live step 6 reworded to "the ping carries the target's board (or `*` for a wildcard target), so a Board filter may drop it". | `e15eb61` |
+| N3  | minor | Two 409 cases added with the plugin's real `{detail: "<string>"}` envelope, pinning the `server`-fallback path that actually carries the reason today.                                                                                                                                                              | `e15eb61` |
+| N4  | minor | `typeOptions: { numberPrecision: 0 }` on Create's Priority and Max Runtime (and on Reprioritize's Priority, which only guarded at run time), plus 422 folded into the 400 branch so FastAPI's pydantic error gets the same "whole numbers" hint.                                                                    | `e15eb61` |
+| N5  | minor | One sentence in `KANBAN_EVENTS_NOTICE` and the README: on bridge deliveries `profile` is the task's assignee, so a Profile filter set to a Hermes profile silently drops every bridge event — prefer the Board filter and leave Profile empty.                                                                      | `e15eb61` |
+| N6  | nit   | Notice now says _task-scoped_ Kanban events carry those coordinates, and that `on_kanban_dispatch_tick` is board-scoped and carries no task.                                                                                                                                                                        | `e15eb61` |
+| N7  | nit   | Get Many's description: "highest priority first and oldest first within a priority", matching `ORDER BY priority DESC, created_at ASC` (`kanban_db.py:1447`).                                                                                                                                                       | `e15eb61` |
+| N8  | nit   | README note only, UI unchanged as the reviewer suggested: `tasks/list` has no offset or cursor and caps at 200, so there is nothing for a Return All to page through.                                                                                                                                               | `e15eb61` |
+| N9  | nit   | Comment on `extractTransitionReason` now says the three-envelope search is deliberate, cheap defence and that the shipped plugin only ever hits the `server` fallback.                                                                                                                                              | `e15eb61` |
+
+Deviations from the reviewer's suggested fixes, both widenings rather than narrowings:
+
+- **N4** — `numberPrecision: 0` was also added to Reprioritize's Priority, which the finding did not
+  ask for. It already rejected decimals at run time, so leaving it as the only integer field the UI
+  accepted decimals in would have been inconsistent; the run-time guard and its test are unchanged.
+- **N4** — the optional 422 fold was taken. Without it a decimal Priority surfaces as a raw FastAPI
+  error even though the 400 hint already promises those fields are whole numbers.
+
+Nothing else in the review needed action: the reviewer's "What checks out" section (gates, wire
+contract against `origin/plugin/v1` @ `d4ca41d`, correctness against the real Hermes source, secrets
+hygiene) reported no defects, and the four pre-existing PLAN.md deviations were accepted as justified.
 
 ## Proposed (not built)
 
