@@ -228,7 +228,7 @@ Uses the [Hermes Kanban Bridge](#hermes-kanban-bridge) credential. Every operati
 | **Reprioritize**       | `tasks/action`  | Task ID, Priority (whole number; higher is dispatched first)                                                                 |
 | **Edit**               | `tasks/action`  | Task ID; Fields to Edit: Body, Title (at least one)                                                                          |
 
-**Create** is idempotent when you set an **Idempotency Key**: an existing non-archived task with the same key is returned instead of a duplicate, and the response has `created: false`. Statuses are `triage`, `todo`, `ready`, `running`, `blocked`, `review`, `done` and `archived`.
+**Create** is idempotent when you set an **Idempotency Key**: an existing non-archived task with the same key is returned instead of a duplicate, and the response has `created: false`. Statuses are `triage`, `todo`, `scheduled`, `ready`, `running`, `blocked`, `review`, `done` and `archived`.
 
 Bridge-specific errors get their own messages: **401** points at the token and `kbctl token list`; **403** names the board / assignee / action that fell outside the token's scopes; **404** reminds you that task IDs are per board; **409** shows the transition reason `kanban_db` gave (for example completing a task that is in `todo`, not `review`). An unreachable bridge explains that the plugin only answers in the dashboard process.
 

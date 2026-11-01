@@ -25,10 +25,14 @@ export const KANBAN_BRIDGE_HEALTH_PATH = `${KANBAN_BRIDGE_BASE_PATH}/health`;
 /** Server-side cap on `v1/tasks/list`. */
 export const KANBAN_LIST_MAX_LIMIT = 200;
 
-/** Kanban task statuses (hermes_cli/kanban_db.py). */
+/**
+ * Kanban task statuses, in dashboard column order (`DEFAULT_WORKFLOW` in
+ * hermes_cli/kanban_workflow.py, plus `archived`).
+ */
 export const KANBAN_STATUSES = [
 	'triage',
 	'todo',
+	'scheduled',
 	'ready',
 	'running',
 	'blocked',
@@ -138,7 +142,7 @@ export function kanbanBridgeErrorMessage(
 		const reason = extractTransitionReason(body) ?? server;
 		return {
 			message: `The Kanban Bridge refused this change${reason ? `: ${reason}` : ' because the task is in a status that does not allow it'}`,
-			description: `Kanban transitions are checked against the task's current status (triage, todo, ready, running, blocked, review, done, archived)${target ? ` — re-read ${target} with the Get operation to see where it is now` : ''}. Complete (Approve) is meant for a task in review.`,
+			description: `Kanban transitions are checked against the task's current status (triage, todo, scheduled, ready, running, blocked, review, done, archived)${target ? ` — re-read ${target} with the Get operation to see where it is now` : ''}. Complete (Approve) is meant for a task in review.`,
 		};
 	}
 	return undefined;

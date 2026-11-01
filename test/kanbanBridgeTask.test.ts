@@ -165,6 +165,7 @@ describe('Kanban Task: description shape', () => {
 		expect((status?.options ?? []).map((o) => o.value)).toEqual([
 			'triage',
 			'todo',
+			'scheduled',
 			'ready',
 			'running',
 			'blocked',
