@@ -39,7 +39,8 @@
 		"credentials": [
 			"dist/credentials/HermesApi.credentials.js",
 			"dist/credentials/HermesWebhookApi.credentials.js",
-			"dist/credentials/HermesOutboundWebhookApi.credentials.js"
+			"dist/credentials/HermesOutboundWebhookApi.credentials.js",
+			"dist/credentials/HermesKanbanBridgeApi.credentials.js"
 		],
 		"nodes": [
 			"dist/nodes/Hermes/Hermes.node.js",

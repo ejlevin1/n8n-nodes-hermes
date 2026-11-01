@@ -1,6 +1,7 @@
 import type { IExecuteFunctions, INodeExecutionData, INodeProperties } from 'n8n-workflow';
 import { chatDescription, executeChat } from './chat';
 import { executeJob, jobDescription } from './job';
+import { executeKanbanTask, kanbanTaskDescription } from './kanbanTask';
 import { executeResponse, responseDescription } from './response';
 import { executeRun, runDescription } from './run';
 import { executeSession, sessionDescription } from './session';
@@ -13,6 +14,7 @@ export type ResourceValue =
 	| 'run'
 	| 'session'
 	| 'job'
+	| 'kanbanTask'
 	| 'system'
 	| 'webhookRoute';
 
@@ -32,6 +34,10 @@ export interface ResourceDefinition {
 export const resourceLabels: Record<ResourceValue, { name: string; description: string }> = {
 	chat: { name: 'Chat', description: 'Send a message via the OpenAI-compatible chat endpoint' },
 	job: { name: 'Cron Job', description: 'Manage scheduled agent jobs' },
+	kanbanTask: {
+		name: 'Kanban Task',
+		description: 'Drive Hermes Kanban boards through the kanban-bridge plugin',
+	},
 	response: { name: 'Response', description: 'Create and manage stored Responses API results' },
 	run: {
 		name: 'Run',
@@ -52,6 +58,7 @@ export const resourceLabels: Record<ResourceValue, { name: string; description: 
 export const resources: Partial<Record<ResourceValue, ResourceDefinition>> = {
 	chat: { description: chatDescription, execute: executeChat },
 	job: { description: jobDescription, execute: executeJob },
+	kanbanTask: { description: kanbanTaskDescription, execute: executeKanbanTask },
 	response: { description: responseDescription, execute: executeResponse },
 	run: { description: runDescription, execute: executeRun },
 	session: { description: sessionDescription, execute: executeSession },

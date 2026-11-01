@@ -101,6 +101,7 @@ describe('HermesTrigger.webhook', () => {
 			event: 'post_llm_call',
 			profile: 'default',
 			platform: 'cron',
+			board: null,
 			sessionId: 'sess-1',
 			toolName: null,
 			toolInput: null,

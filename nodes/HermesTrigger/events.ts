@@ -1,5 +1,17 @@
 import type { IDataObject, INodePropertyOptions } from 'n8n-workflow';
 
+/** Prefix every kanban-bridge delivery's `hook_event_name` carries (`kanban_task_<kind>`). */
+export const KANBAN_BRIDGE_EVENT_PREFIX = 'kanban_task_';
+
+/** Test delivery sent by `kbctl targets test`. */
+export const KANBAN_BRIDGE_PING_EVENT = 'kanban_bridge_ping';
+
+/**
+ * Sentinel "Any Kanban Event" option: matches every `kanban_task_*` delivery plus the bridge ping,
+ * so event kinds the plugin adds later need no node update. Not a Hermes hook name.
+ */
+export const KANBAN_ANY_EVENT = 'kanban_task_*';
+
 /**
  * Curated subset of Hermes `VALID_HOOKS` (hermes_cli/plugins.py) that is useful as an n8n trigger.
  * Deliberately excluded: per-token `on_stream_delta`, `pre_gateway_dispatch` (in-process objects,
@@ -12,6 +24,12 @@ export const HERMES_TRIGGER_EVENTS: INodePropertyOptions[] = [
 		value: 'agent_loop_stopped',
 		description:
 			'A running agent turn was interrupted (/stop, or /new while busy). Carries session_key, platform, reason.',
+	},
+	{
+		name: 'Any Kanban Event',
+		value: KANBAN_ANY_EVENT,
+		description:
+			'Every kanban-bridge delivery (<code>kanban_task_*</code>), whatever the event kind — including kinds the plugin adds later and the <code>kanban_bridge_ping</code> test delivery from <code>kbctl targets test</code>',
 	},
 	{
 		name: 'API Request Error',
@@ -30,14 +48,81 @@ export const HERMES_TRIGGER_EVENTS: INodePropertyOptions[] = [
 		description: 'A pending human-input wait ended (answered, skipped, timed out or failed)',
 	},
 	{
+		name: 'Kanban Dispatch Tick',
+		value: 'on_kanban_dispatch_tick',
+		description:
+			'One dispatcher tick finished. Carries board, dry_run, outcome (ok, skipped_locked or idle) and the full DispatchResult in extra.',
+	},
+	{
+		name: 'Kanban Task Archived',
+		value: 'kanban_task_archived',
+		description:
+			'A Kanban task was archived and left the board. Delivered only by the kanban-bridge plugin.',
+	},
+	{
 		name: 'Kanban Task Blocked',
 		value: 'kanban_task_blocked',
-		description: 'A Kanban task moved to blocked',
+		description:
+			'A Kanban task moved to blocked. Carries board, assignee, run_id and reason. Delivered by Hermes hooks.outbound and by the kanban-bridge plugin.',
+	},
+	{
+		name: 'Kanban Task Changes Requested',
+		value: 'kanban_task_changes_requested',
+		description:
+			'A Kanban task in review was sent back for more work, with a reason. Hermes fires no hook for this, so it only arrives through the kanban-bridge plugin.',
+	},
+	{
+		name: 'Kanban Task Claimed',
+		value: 'kanban_task_claimed',
+		description:
+			'A Kanban task was claimed by the dispatcher, just before the worker is spawned. Carries board, assignee and run_id. Delivered by Hermes hooks.outbound and by the kanban-bridge plugin.',
 	},
 	{
 		name: 'Kanban Task Completed',
 		value: 'kanban_task_completed',
-		description: 'A Kanban task was completed',
+		description:
+			'A Kanban task was completed. Carries board, assignee, run_id and summary. Delivered by Hermes hooks.outbound and by the kanban-bridge plugin.',
+	},
+	{
+		name: 'Kanban Task Created',
+		value: 'kanban_task_created',
+		description: 'A Kanban task was created. Delivered only by the kanban-bridge plugin.',
+	},
+	{
+		name: 'Kanban Task Review Requested',
+		value: 'kanban_task_review_requested',
+		description:
+			'A Kanban task moved to review and is waiting for human approval. Hermes fires no hook for this, so it only arrives through the kanban-bridge plugin.',
+	},
+	{
+		name: 'Kanban Task Unblocked',
+		value: 'kanban_task_unblocked',
+		description:
+			'A blocked Kanban task returned to the queue. Delivered only by the kanban-bridge plugin.',
+	},
+	{
+		name: 'Kanban Task Updated',
+		value: 'on_kanban_task_updated',
+		description:
+			'A Kanban task row was written outside claim, complete or block. Carries changed_fields — field names only, never values.',
+	},
+	{
+		name: 'Kanban Worker Exited',
+		value: 'on_kanban_worker_exited',
+		description:
+			'A Kanban worker process was found dead and reclaimed. Carries worker_pid, exit_kind, exit_code, outcome and retry_status.',
+	},
+	{
+		name: 'Kanban Worker Spawned',
+		value: 'on_kanban_worker_spawned',
+		description:
+			'A Kanban worker process was started for a claimed task. Carries worker_pid and workspace_path.',
+	},
+	{
+		name: 'Kanban Worker Stale Claim',
+		value: 'on_kanban_worker_stale_claim',
+		description:
+			'A Kanban claim passed its TTL and was reclaimed. Carries worker_pid, heartbeat_stale and retry_status.',
 	},
 	{
 		name: 'LLM Call Finished',
@@ -109,6 +194,69 @@ export const HERMES_TRIGGER_EVENT_VALUES: string[] = HERMES_TRIGGER_EVENTS.map((
 
 export const TOOL_SCOPED_EVENTS = ['pre_tool_call', 'post_tool_call'];
 
+/**
+ * Kanban hooks Hermes itself fires (hermes_cli/plugins.py `VALID_HOOKS`). Every one carries
+ * `board`, `task_id`, `assignee`, `run_id` and `profile_name` as hook kwargs, so they land in
+ * `extra` (only tool_name/args/session_id/parent_session_id are top-level — agent/shell_hooks.py
+ * `_TOP_LEVEL_PAYLOAD_KEYS`). These come from `hooks.outbound` in config.yaml.
+ */
+export const KANBAN_HOOK_EVENTS = [
+	'kanban_task_claimed',
+	'kanban_task_completed',
+	'kanban_task_blocked',
+	'on_kanban_task_updated',
+	'on_kanban_worker_spawned',
+	'on_kanban_worker_exited',
+	'on_kanban_worker_stale_claim',
+	'on_kanban_dispatch_tick',
+];
+
+/**
+ * Events the `kanban-bridge` plugin pushes by tailing `task_events` — `kanban_task_<kind>` for
+ * every kind, so it also covers review_requested / changes_requested / archived / unblocked /
+ * created, which Hermes fires no hook for. Configured in the plugin's `targets` setting, not
+ * `hooks.outbound`. Claimed/completed/blocked are shared with the hook list: the names are
+ * identical, so one option matches either source.
+ */
+export const KANBAN_BRIDGE_EVENTS = [
+	KANBAN_ANY_EVENT,
+	'kanban_task_created',
+	'kanban_task_claimed',
+	'kanban_task_review_requested',
+	'kanban_task_changes_requested',
+	'kanban_task_completed',
+	'kanban_task_blocked',
+	'kanban_task_unblocked',
+	'kanban_task_archived',
+];
+
+/** Every Kanban option, from either source. These are the events the Board filter narrows. */
+export const KANBAN_EVENTS = [...new Set([...KANBAN_BRIDGE_EVENTS, ...KANBAN_HOOK_EVENTS])];
+
+/** True for a delivery that can only have come from the kanban-bridge plugin. */
+export function isKanbanBridgeEvent(event: string): boolean {
+	return event.startsWith(KANBAN_BRIDGE_EVENT_PREFIX) || event === KANBAN_BRIDGE_PING_EVENT;
+}
+
+/**
+ * Bridge-delivery keys that sit top-level in the body (see the wire contract) but are the Kanban
+ * equivalents of what Hermes hooks put in `extra`. They are folded into `extra` so a workflow
+ * reads `extra.task_id` whichever source delivered the event.
+ */
+export const KANBAN_BRIDGE_EXTRA_KEYS = [
+	'board',
+	'task_id',
+	'event_id',
+	'event_kind',
+	'run_id',
+	'title',
+	'status',
+	'assignee',
+	'priority',
+	'actor',
+	'payload',
+];
+
 export const DEFAULT_EVENTS = ['post_llm_call'];
 
 export const DEFAULT_SIGNING_ENV_VAR = 'HERMES_N8N_WEBHOOK_SECRET';
@@ -120,6 +268,8 @@ export interface HermesTriggerFilters {
 	events: string[];
 	/** Accepted `extra.platform` values (case-insensitive). Empty or undefined: any platform. */
 	platforms?: string[];
+	/** Accepted board values (case-insensitive), top-level or `extra.board`. Empty: any board. */
+	boards?: string[];
 	/** Session to match against session_id / extra.session_key / parent / child session ids. */
 	sessionId?: string;
 	/** Regex matched against `tool_name`. Invalid regex falls back to literal equality (as Hermes does). */
@@ -132,6 +282,8 @@ export interface NormalizedHermesEvent extends IDataObject {
 	event: string;
 	profile: string | null;
 	platform: string | null;
+	/** `extra.board` for Kanban events, else null. Mirrors how `platform` is surfaced. */
+	board: string | null;
 	sessionId: string | null;
 	toolName: string | null;
 	toolInput: IDataObject | null;
@@ -158,6 +310,15 @@ function asObject(value: unknown): IDataObject {
 	return value !== null && typeof value === 'object' && !Array.isArray(value)
 		? (value as IDataObject)
 		: {};
+}
+
+/** Copy the listed keys that are actually present (and not null) into a new object. */
+function pickDefined(source: IDataObject, keys: string[]): IDataObject {
+	const picked: IDataObject = {};
+	for (const key of keys) {
+		if (source[key] !== undefined && source[key] !== null) picked[key] = source[key];
+	}
+	return picked;
 }
 
 function asNonEmptyString(value: unknown): string | null {
@@ -216,6 +377,23 @@ export function parseList(value: unknown): string[] {
 }
 
 /**
+ * Whether an event name is covered by the selected options. Exact match, or the
+ * "Any Kanban Event" sentinel covering every `kanban_task_*` delivery and the bridge ping.
+ */
+export function isEventSelected(event: string, selected: string[]): boolean {
+	if (selected.includes(event)) return true;
+	return selected.includes(KANBAN_ANY_EVENT) && isKanbanBridgeEvent(event);
+}
+
+/**
+ * Board the event is about. kanban-bridge puts `board` top-level (wire contract); Hermes hooks
+ * pass it as a hook kwarg, so it lands in `extra.board`.
+ */
+export function getEventBoard(payload: IDataObject): string | null {
+	return asNonEmptyString(payload.board) ?? asNonEmptyString(asObject(payload.extra).board);
+}
+
+/**
  * Returns `null` when the event passes every filter, otherwise a short human-readable reason.
  * Filters narrow: when a filter is set, events that lack the field (e.g. no `extra.platform`,
  * no `tool_name`) are rejected.
@@ -227,7 +405,7 @@ export function getFilterRejection(
 ): string | null {
 	const event = getEventName(payload, headers);
 	if (!event) return 'missing event name';
-	if (!filters.events.includes(event)) return `event "${event}" not selected`;
+	if (!isEventSelected(event, filters.events)) return `event "${event}" not selected`;
 
 	const profile = filters.profile?.trim().toLowerCase();
 	if (profile) {
@@ -240,6 +418,14 @@ export function getFilterRejection(
 		const platform = asNonEmptyString(asObject(payload.extra).platform)?.toLowerCase() ?? null;
 		if (platform === null || !platforms.includes(platform)) {
 			return `platform "${platform ?? ''}" not in filter`;
+		}
+	}
+
+	const boards = (filters.boards ?? []).map((b) => b.toLowerCase());
+	if (boards.length > 0) {
+		const board = getEventBoard(payload)?.toLowerCase() ?? null;
+		if (board === null || !boards.includes(board)) {
+			return `board "${board ?? ''}" not in filter`;
 		}
 	}
 
@@ -272,14 +458,23 @@ export function matchesFilters(
  *
  * Wire shape: `{hook_event_name, profile, tool_name, tool_input, session_id, cwd, extra,
  * delivery_id, timestamp}`; `extra` holds every other hook kwarg (platform, session_key, ...).
+ *
+ * kanban-bridge deliveries use the same envelope but put the task coordinates top-level
+ * (`board, task_id, event_id, event_kind, run_id, title, status, assignee, priority, actor,
+ * payload`). Those are folded into `extra` so a workflow reads `extra.task_id` whichever source
+ * delivered the event; an explicit `extra` in the body still wins.
  */
 export function normalizeEvent(payload: IDataObject, headers?: HeaderBag): NormalizedHermesEvent {
-	const extra = asObject(payload.extra);
+	const event = getEventName(payload, headers);
+	const extra = isKanbanBridgeEvent(event)
+		? { ...pickDefined(payload, KANBAN_BRIDGE_EXTRA_KEYS), ...asObject(payload.extra) }
+		: asObject(payload.extra);
 	const toolInput = payload.tool_input;
 	return {
-		event: getEventName(payload, headers),
+		event,
 		profile: asNonEmptyString(payload.profile),
 		platform: asNonEmptyString(extra.platform),
+		board: getEventBoard(payload),
 		sessionId: getSessionCandidates(payload)[0] ?? null,
 		toolName: asNonEmptyString(payload.tool_name),
 		toolInput:
@@ -325,4 +520,41 @@ export function buildOutboundYaml(
 		lines.push(`      matcher: ${JSON.stringify(options.matcher)}`);
 	}
 	return lines.join('\n');
+}
+
+export interface KanbanTargetsYamlOptions {
+	name?: string;
+	secretEnv?: string;
+	/** Boards the target receives events for; `['*']` for every board the plugin knows. */
+	boards?: string[];
+}
+
+/**
+ * Ready-to-paste `plugins.entries.kanban-bridge.settings.targets` block for the **default**
+ * profile's `config.yaml`. The bridge pushes from the dashboard process, so this is configured
+ * here and not under `hooks.outbound`; the secret itself lives in the default profile's `.env`
+ * under `secret_env`.
+ */
+export function buildKanbanTargetsYaml(
+	webhookUrlPlaceholder: string,
+	events: string[],
+	options: KanbanTargetsYamlOptions = {},
+): string {
+	const kanban = events.filter((e) => KANBAN_BRIDGE_EVENTS.includes(e));
+	const eventsValue = kanban.includes(KANBAN_ANY_EVENT)
+		? '["*"]'
+		: `[${kanban.filter((e) => /^[a-z0-9_]+$/.test(e)).join(', ')}]`;
+	const boards = options.boards?.length ? options.boards : ['*'];
+	return [
+		'plugins:',
+		'  entries:',
+		'    kanban-bridge:',
+		'      settings:',
+		'        targets:',
+		`          - name: ${options.name ?? 'n8n'}`,
+		`            url: ${JSON.stringify(webhookUrlPlaceholder)}`,
+		`            boards: [${boards.map((b) => JSON.stringify(b)).join(', ')}]`,
+		`            events: ${eventsValue}`,
+		`            secret_env: ${options.secretEnv ?? DEFAULT_SIGNING_ENV_VAR}`,
+	].join('\n');
 }

@@ -29,6 +29,9 @@
 		"OpenAI compatible",
 		"Runs",
 		"Sessions",
-		"Cron"
+		"Cron",
+		"Kanban",
+		"Kanban board",
+		"Tasks"
 	]
 }

@@ -16,7 +16,11 @@ import {
 	DEFAULT_EVENTS,
 	DEFAULT_SIGNING_ENV_VAR,
 	HERMES_TRIGGER_EVENTS,
+	KANBAN_ANY_EVENT,
+	KANBAN_BRIDGE_EVENTS,
+	KANBAN_EVENTS,
 	TOOL_SCOPED_EVENTS,
+	buildKanbanTargetsYaml,
 	buildOutboundYaml,
 	getFilterRejection,
 	getHeader,
@@ -29,7 +33,11 @@ import { DEFAULT_MAX_EVENT_AGE_MS, isStale, verifySignature } from './verifySign
 const CREDENTIAL_NAME = 'hermesOutboundWebhookApi';
 const RECOMMENDED_SECRET_LENGTH = 32;
 
-const SETUP_YAML = buildOutboundYaml('<this node’s Production URL>', DEFAULT_EVENTS);
+const WEBHOOK_URL_PLACEHOLDER = '<this node’s Production URL>';
+
+const SETUP_YAML = buildOutboundYaml(WEBHOOK_URL_PLACEHOLDER, DEFAULT_EVENTS);
+
+const KANBAN_TARGETS_YAML = buildKanbanTargetsYaml(WEBHOOK_URL_PLACEHOLDER, [KANBAN_ANY_EVENT]);
 
 const SETUP_NOTICE =
 	'<b>Setup:</b> Hermes outbound hooks are configured only in <code>~/.hermes/config.yaml</code>. ' +
@@ -37,7 +45,9 @@ const SETUP_NOTICE =
 	'<code>events</code> list exactly the events you select here (unlisted events are never sent; ' +
 	'selected but unlisted events never arrive). Put the credential’s Signing Secret in ' +
 	`<code>~/.hermes/.env</code> as <code>${DEFAULT_SIGNING_ENV_VAR}=…</code>, then restart Hermes ` +
-	'(gateway or CLI session).' +
+	'(gateway or CLI session). <b>Kanban bridge events</b> (<code>kanban_task_*</code>) do not come ' +
+	'from <code>hooks.outbound</code> at all — select one and a second notice shows the ' +
+	'<code>targets</code> block they need instead.' +
 	`<pre>${SETUP_YAML}</pre>`;
 
 const TOOL_EVENTS_NOTICE =
@@ -50,6 +60,37 @@ const APPROVAL_EVENTS_NOTICE =
 	'correlated with <code>/v1/runs</code>. For API-driven runs, use the Hermes node’s Run ' +
 	'operations (Wait for Completion and Respond to Approval) instead. Hermes auto-denies pending ' +
 	'approvals after <code>approvals.timeout</code> (default 300 s).';
+
+const KANBAN_EVENTS_NOTICE =
+	'Task-scoped Kanban events carry their task coordinates in <code>extra</code> ' +
+	'(<code>task_id</code>, <code>board</code>, <code>assignee</code>, <code>run_id</code>, and for ' +
+	'bridge deliveries also <code>event_id</code>, <code>event_kind</code>, <code>title</code>, ' +
+	'<code>status</code>, <code>priority</code>, <code>actor</code> and the event’s own ' +
+	'<code>payload</code>); <code>board</code> is also surfaced top-level. ' +
+	'<code>on_kanban_dispatch_tick</code> is board-scoped and carries no task. Use the Board filter ' +
+	'below to watch a single board — prefer it over Profile above, because on bridge deliveries ' +
+	'<code>profile</code> is the task’s assignee rather than a Hermes profile, so a Profile ' +
+	'filter set to a Hermes profile silently drops every bridge event. Note that ' +
+	'<code>on_kanban_task_updated</code> reports <code>changed_fields</code> as field names only, ' +
+	'never their values.';
+
+const KANBAN_BRIDGE_NOTICE =
+	'<b>Kanban bridge setup:</b> <code>kanban_task_*</code> events are pushed by the ' +
+	'<code>kanban-bridge</code> plugin, which tails <code>task_events</code> in the Hermes ' +
+	'<b>dashboard</b> process — that is the only way review-requested, changes-requested, ' +
+	'archived, unblocked and created ever reach n8n, because Hermes fires no hook for them. They are ' +
+	'configured in the <b>default</b> profile’s <code>config.yaml</code> under ' +
+	'<code>plugins.entries.kanban-bridge.settings.targets</code>, <i>not</i> ' +
+	'<code>hooks.outbound</code>. Paste the block below (replacing <code>url</code> with the ' +
+	'Production URL above and narrowing <code>boards</code>), put the credential’s Signing ' +
+	`Secret in the default profile’s <code>.env</code> as <code>${DEFAULT_SIGNING_ENV_VAR}=…</code>, ` +
+	'then restart the dashboard. Signing is identical to Hermes outbound webhooks, so this node ' +
+	'verifies both the same way. Check it end to end with <code>kbctl targets test &lt;name&gt;</code>: ' +
+	'that sends a <code>kanban_bridge_ping</code>, which only starts the workflow when <b>Any Kanban ' +
+	'Event</b> is selected — otherwise it is acknowledged with HTTP 200 and ignored. The ping ' +
+	'carries the target’s board (or <code>*</code> for a wildcard target), so a Board filter may ' +
+	'drop it too.' +
+	`<pre>${KANBAN_TARGETS_YAML}</pre>`;
 
 function reject(this: IWebhookFunctions, status: number): IWebhookResponseData {
 	this.getResponseObject().status(status).end();
@@ -65,7 +106,7 @@ export class HermesTrigger implements INodeType {
 		version: 1,
 		subtitle: '={{ ($parameter["events"] || []).join(", ") }}',
 		description:
-			'Starts the workflow when Hermes Agent sends a signed outbound webhook (hooks.outbound)',
+			'Starts the workflow when Hermes Agent sends a signed outbound webhook (hooks.outbound) or the kanban-bridge plugin pushes a Kanban event',
 		defaults: {
 			name: 'Hermes Trigger',
 		},
@@ -101,7 +142,7 @@ export class HermesTrigger implements INodeType {
 				options: HERMES_TRIGGER_EVENTS,
 				default: ['post_llm_call'],
 				description:
-					'Hermes hook events that start this workflow. Must match the <code>events</code> list of the hook entry in config.yaml.',
+					'Events that start this workflow. Must match the <code>events</code> list of the matching delivery config: the <code>hooks.outbound</code> entry in config.yaml, or the <code>kanban-bridge</code> target for <code>kanban_task_*</code> events.',
 			},
 			{
 				displayName: 'Profile',
@@ -120,6 +161,28 @@ export class HermesTrigger implements INodeType {
 				displayOptions: {
 					show: {
 						events: TOOL_SCOPED_EVENTS,
+					},
+				},
+			},
+			{
+				displayName: KANBAN_EVENTS_NOTICE,
+				name: 'kanbanEventsNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: {
+					show: {
+						events: KANBAN_EVENTS,
+					},
+				},
+			},
+			{
+				displayName: KANBAN_BRIDGE_NOTICE,
+				name: 'kanbanBridgeNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: {
+					show: {
+						events: KANBAN_BRIDGE_EVENTS,
 					},
 				},
 			},
@@ -148,6 +211,15 @@ export class HermesTrigger implements INodeType {
 				description:
 					'Events that do not match are acknowledged with HTTP 200 without starting the workflow. When a filter is set, events that lack the field are dropped.',
 				options: [
+					{
+						displayName: 'Board',
+						name: 'boards',
+						type: 'string',
+						default: '',
+						placeholder: 'main, release',
+						description:
+							'Comma-separated list matched (case-insensitive) against the event board — <code>board</code> on kanban-bridge deliveries, <code>extra.board</code> on Hermes hooks. Events without a board (including the bridge ping) are dropped when this is set.',
+					},
 					{
 						displayName: 'Platform',
 						name: 'platforms',
@@ -334,6 +406,7 @@ export class HermesTrigger implements INodeType {
 		const rejection = getFilterRejection(payload, headers, {
 			events,
 			platforms: parseList(filters.platforms),
+			boards: parseList(filters.boards),
 			sessionId: typeof filters.sessionId === 'string' ? filters.sessionId : undefined,
 			toolName: typeof filters.toolName === 'string' ? filters.toolName : undefined,
 			profile,
