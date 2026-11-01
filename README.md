@@ -4,16 +4,17 @@ This is an n8n community node package for [Hermes Agent](https://github.com/Nous
 
 It contains two nodes:
 
-- **Hermes** (action node, also usable as a tool by the n8n AI Agent): talk to the agent, run long asynchronous agent work with approvals, manage sessions and cron jobs, read capabilities, and send signed events to Hermes webhook routes.
-- **Hermes Trigger**: starts a workflow when Hermes sends a signed outbound lifecycle event (`hooks.outbound`), for example when a turn finishes, a tool runs, or an approval is requested.
+- **Hermes** (action node, also usable as a tool by the n8n AI Agent): talk to the agent, run long asynchronous agent work with approvals, manage sessions and cron jobs, read capabilities, drive Kanban boards, and send signed events to Hermes webhook routes.
+- **Hermes Trigger**: starts a workflow when Hermes sends a signed outbound lifecycle event (`hooks.outbound`) or the `kanban-bridge` plugin pushes a Kanban event — for example when a turn finishes, a tool runs, an approval is requested, or a Kanban task asks for review.
 
-Hermes exposes three HTTP surfaces, and each has its own credential:
+Hermes exposes four HTTP surfaces, and each has its own credential:
 
-| Surface                                              | Default port           | Used by                                          | Credential                                          |
-| ---------------------------------------------------- | ---------------------- | ------------------------------------------------ | --------------------------------------------------- |
-| API server (OpenAI-compatible, runs, sessions, jobs) | 8642                   | Hermes node (all resources except Webhook Route) | [Hermes API](#hermes-api)                           |
-| Webhook adapter (inbound routes)                     | 8644                   | Hermes node, Webhook Route resource              | [Hermes Webhook](#hermes-webhook)                   |
-| Outbound webhooks (`hooks.outbound`)                 | n/a (Hermes calls n8n) | Hermes Trigger                                   | [Hermes Outbound Webhook](#hermes-outbound-webhook) |
+| Surface                                                       | Default port           | Used by                                                          | Credential                                          |
+| ------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
+| API server (OpenAI-compatible, runs, sessions, jobs)          | 8642                   | Hermes node (all resources except Webhook Route and Kanban Task) | [Hermes API](#hermes-api)                           |
+| Webhook adapter (inbound routes)                              | 8644                   | Hermes node, Webhook Route resource                              | [Hermes Webhook](#hermes-webhook)                   |
+| Dashboard, `kanban-bridge` plugin                             | 9119                   | Hermes node, Kanban Task resource                                | [Hermes Kanban Bridge](#hermes-kanban-bridge)       |
+| Outbound webhooks (`hooks.outbound`) and kanban-bridge pushes | n/a (Hermes calls n8n) | Hermes Trigger                                                   | [Hermes Outbound Webhook](#hermes-outbound-webhook) |
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
@@ -135,9 +136,33 @@ Used by the **Hermes Trigger**. Hermes signs every outbound delivery with `X-Her
 
 The connection test checks that the secret is set (and warns if it is shorter than 32 characters). If a Base URL is set it also pings `{Base URL}/health`. Outbound hooks fire from CLI-only installs too, so the Base URL is optional.
 
+### Hermes Kanban Bridge
+
+Used by the Hermes node's [Kanban Task](#kanban-task) resource. This surface is **not** the API gateway: it is a router the [`kanban-bridge`](https://github.com/ejlevin1/hermes-kanban-bridge) plugin mounts inside the Hermes **dashboard** process (default profile, `127.0.0.1:9119`) under `/api/plugins/kanban-bridge/v1/`.
+
+1. Enable the plugin in the **default** profile and restart the dashboard.
+2. Mint a scoped token on the Hermes host. It is written to the file you name and never printed:
+
+   ```bash
+   kbctl token create --label n8n-dev --boards acquisitions --assignees deal-analyst --out ~/n8n-dev.token
+   ```
+
+3. In n8n, create a **Hermes Kanban Bridge API** credential:
+   - **Base URL**: `http://host.docker.internal:9119` when n8n runs in Docker, `http://127.0.0.1:9119` when it runs on the Hermes host
+   - **Host Header**: `127.0.0.1:9119` — sent as the `Host` header
+   - **Token**: the `kbb_…` value from the file above
+
+The dashboard's host check accepts **loopback `Host` headers only**. That is why Base URL and Host Header are separate fields: a Docker n8n connects to `host.docker.internal` but must still claim `Host: 127.0.0.1:9119`. Leaving Host Header empty omits the header and the dashboard will reject the request.
+
+The connection test calls `GET /api/plugins/kanban-bridge/v1/health`, which returns the bridge version, the token's label and its scopes — so a passing test proves the token is valid and unrevoked.
+
+**Scopes.** A token is scoped to a set of boards, assignees and actions. A request outside any of them is refused with 403 rather than widened; the node's error explains which of board / assignee / action fell outside. Inspect scopes with `kbctl token list`, change them with `kbctl token scope <label> …`, and revoke with `kbctl token revoke <label>`.
+
+**Attribution.** Every mutation is recorded on the task with the author `n8n:<token label>`, so board history shows which n8n credential made a change.
+
 ## Operations
 
-The Hermes node has seven resources.
+The Hermes node has eight resources.
 
 ### Chat
 
@@ -184,6 +209,31 @@ Sessions owned by another surface (for example a Telegram chat) can't be changed
 
 - **Get Capabilities**, **Get Health** (`/health/detailed`), **List Models**, **List Model Options**, **List Skills**, **List Toolsets**.
 
+### Kanban Task
+
+Uses the [Hermes Kanban Bridge](#hermes-kanban-bridge) credential. Every operation is a `POST` under `/api/plugins/kanban-bridge/v1/` with the ids in the JSON body, and every operation takes **Board** (required) — task IDs are per board.
+
+| Operation              | Route           | Fields                                                                                                                       |
+| ---------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Create**             | `tasks/create`  | Title (required); Options: Assignee, Body, Idempotency Key, Max Runtime (Seconds), Parents, Priority, Skills, Tenant, Triage |
+| **Get**                | `tasks/get`     | Task ID. Returns the task with its comments, last 50 events and a runs summary.                                              |
+| **Get Many**           | `tasks/list`    | Limit (≤ 200); Filters: Assignee, Status. One output item per task.                                                          |
+| **Comment**            | `tasks/comment` | Task ID, Comment                                                                                                             |
+| **Complete (Approve)** | `tasks/action`  | Task ID; Options: Metadata, Result, Summary. From `review` this is the human approval.                                       |
+| **Request Changes**    | `tasks/action`  | Task ID, Reason — sends a task in review back for more work                                                                  |
+| **Block**              | `tasks/action`  | Task ID, Reason                                                                                                              |
+| **Unblock**            | `tasks/action`  | Task ID                                                                                                                      |
+| **Archive**            | `tasks/action`  | Task ID                                                                                                                      |
+| **Assign**             | `tasks/action`  | Task ID, Assignee                                                                                                            |
+| **Reprioritize**       | `tasks/action`  | Task ID, Priority (whole number; higher is dispatched first)                                                                 |
+| **Edit**               | `tasks/action`  | Task ID; Fields to Edit: Body, Title (at least one)                                                                          |
+
+**Create** is idempotent when you set an **Idempotency Key**: an existing non-archived task with the same key is returned instead of a duplicate, and the response has `created: false`. Statuses are `triage`, `todo`, `ready`, `running`, `blocked`, `review`, `done` and `archived`.
+
+Bridge-specific errors get their own messages: **401** points at the token and `kbctl token list`; **403** names the board / assignee / action that fell outside the token's scopes; **404** reminds you that task IDs are per board; **409** shows the transition reason `kanban_db` gave (for example completing a task that is in `todo`, not `review`). An unreachable bridge explains that the plugin only answers in the dashboard process.
+
+To react to board changes rather than drive them, use the **Hermes Trigger**'s [Kanban events](#kanban-events).
+
 ### Webhook Route
 
 Uses the [Hermes Webhook](#hermes-webhook) credential.
@@ -208,7 +258,12 @@ The Hermes Trigger accepts these events (select one or more):
 | Subagent Started / Stopped                    | `subagent_start`, `subagent_stop`                                                     |
 | Pre Approval Request / Post Approval Response | `pre_approval_request`, `post_approval_response`                                      |
 | Human Input Request / Resolved                | `on_human_input_request`, `on_human_input_resolved`                                   |
+| Any Kanban Event                              | `kanban_task_*` (any bridge delivery, plus `kanban_bridge_ping`)                      |
 | Kanban Task Claimed / Completed / Blocked     | `kanban_task_claimed`, `kanban_task_completed`, `kanban_task_blocked`                 |
+| Kanban Task Created / Archived                | `kanban_task_created`, `kanban_task_archived`                                         |
+| Kanban Task Review Requested                  | `kanban_task_review_requested`                                                        |
+| Kanban Task Changes Requested                 | `kanban_task_changes_requested`                                                       |
+| Kanban Task Unblocked                         | `kanban_task_unblocked`                                                               |
 | Kanban Task Updated                           | `on_kanban_task_updated`                                                              |
 | Kanban Worker Spawned / Exited / Stale Claim  | `on_kanban_worker_spawned`, `on_kanban_worker_exited`, `on_kanban_worker_stale_claim` |
 | Kanban Dispatch Tick                          | `on_kanban_dispatch_tick`                                                             |
@@ -218,7 +273,7 @@ The Hermes Trigger accepts these events (select one or more):
 
 Per-token `on_stream_delta`, `pre_gateway_dispatch` and the `transform_*` hooks are not offered.
 
-**Filters**: Board (comma-separated, matches `extra.board` case-insensitively on Kanban events), Platform (matches `extra.platform`, e.g. `cron`, `webhook`, `api_server`, `cli`), Session ID (matches `session_id`, `extra.session_key`, `extra.parent_session_id` or `extra.child_session_id`) and Tool Name (regex). Events that don't match are acknowledged with HTTP 200 and don't start the workflow. When a filter is set, events that lack the field are dropped.
+**Filters**: Board (comma-separated, case-insensitive; matches the top-level `board` on kanban-bridge deliveries and `extra.board` on Hermes hooks), Platform (matches `extra.platform`, e.g. `cron`, `webhook`, `api_server`, `cli`), Session ID (matches `session_id`, `extra.session_key`, `extra.parent_session_id` or `extra.child_session_id`) and Tool Name (regex). Events that don't match are acknowledged with HTTP 200 and don't start the workflow. When a filter is set, events that lack the field are dropped.
 
 **Options**: Verify Signature (default on; bad or missing signatures get HTTP 401), Reject Stale Events (default on; the signed `timestamp` must be within Max Event Age, default 300 s).
 
@@ -226,7 +281,37 @@ Each item contains `{event, profile, platform, board, sessionId, toolName, toolI
 
 ### Kanban events
 
-The Kanban hooks carry their task coordinates as hook kwargs, so they arrive inside `extra`: `task_id`, `board`, `assignee`, `run_id` and `profile_name`. `board` is also surfaced top-level (like `platform`) so the Board filter is easy to pair with an expression. Per-event additions:
+Kanban events reach n8n from **two** sources, and the node treats them the same way:
+
+| Source                                          | Events                                                                                                                                                                                        | Configured in                                                                             |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Hermes `hooks.outbound`                         | `kanban_task_claimed`, `kanban_task_completed`, `kanban_task_blocked`, `on_kanban_task_updated`, the three worker hooks and `on_kanban_dispatch_tick`                                         | `hooks.outbound` in `~/.hermes/config.yaml`                                               |
+| [`kanban-bridge`](#hermes-kanban-bridge) plugin | `kanban_task_<kind>` for **every** `task_events` kind — `created`, `claimed`, `review_requested`, `changes_requested`, `completed`, `blocked`, `unblocked`, `archived`, and kinds added later | `plugins.entries.kanban-bridge.settings.targets` in the **default** profile's config.yaml |
+
+Hermes fires **no hook** for review-requested, changes-requested, archived, unblocked or created, so those only ever arrive through the bridge, which tails the `task_events` table in the dashboard process. The shared names (`claimed`, `completed`, `blocked`) are identical, so one selected event matches either source. Signing is the same scheme in both cases, so the trigger verifies both with the same credential.
+
+**Any Kanban Event** is a wildcard that matches every `kanban_task_*` delivery — including kinds the plugin adds later — plus the `kanban_bridge_ping` that `kbctl targets test <name>` sends. With any other selection the ping is acknowledged with HTTP 200 and ignored; note that a ping carries no board, so a Board filter drops it too.
+
+Select a Kanban bridge event and the node shows a ready-to-paste `targets` block:
+
+```yaml
+plugins:
+  entries:
+    kanban-bridge:
+      settings:
+        targets:
+          - name: n8n
+            url: 'https://<your-n8n>/webhook/<id>/hermes'
+            boards: ['acquisitions']
+            events: ['*']
+            secret_env: HERMES_N8N_WEBHOOK_SECRET
+```
+
+The secret lives in the default profile's `.env` under the name given by `secret_env`, never inline. Restart the dashboard after editing the config.
+
+**Where the task fields land.** Hermes hooks pass the task coordinates as hook kwargs, so they arrive inside `extra`. The bridge sends them top-level instead, and the node folds them into `extra` so a workflow reads `extra.task_id` whichever source delivered the event (an explicit `extra` in the body still wins). `board` is also surfaced top-level (like `platform`) so the Board filter is easy to pair with an expression. Bridge deliveries add `event_id`, `event_kind`, `title`, `status`, `priority`, `actor` and the event's own `payload` (for example `{reason: …}` or `{summary: …}`) to `extra`; `profile` holds the task's assignee. `event_id` and `deliveryId` together let you de-duplicate at-least-once deliveries downstream.
+
+Per-event additions for the Hermes hooks:
 
 | Event                          | Adds to `extra`                                                        |
 | ------------------------------ | ---------------------------------------------------------------------- |
@@ -244,6 +329,7 @@ The Kanban hooks carry their task coordinates as hook kwargs, so they arrive ins
 
 - **Approval hooks carry `session_key`, not a run ID.** `pre_approval_request`, `post_approval_response` and the human-input events can't be matched to a `/v1/runs` run. For API-driven runs, handle approvals with the Run resource (Wait for Completion, then Respond to Approval).
 - **Unsigned deliveries.** If the variable named by `secret_env` is not set in Hermes' environment, Hermes logs a warning and sends deliveries **unsigned**. With Verify Signature on (the default) the trigger rejects them with 401; check the Hermes log if nothing arrives.
+- **Kanban bridge events do not come from `hooks.outbound`.** Listing `kanban_task_review_requested` there has no effect: Hermes never fires it. Configure the bridge's `targets` instead, and remember that a target has its own `boards` and `events` lists which must include what you select in the node.
 - Outbound hooks are configured only in `config.yaml`; there is no API to register them. Activating or deactivating the workflow doesn't change Hermes' configuration. Remove the `hooks.outbound` entry to stop deliveries.
 - Hermes retries a delivery only after connection errors or 5xx responses, and the trigger does not de-duplicate (each delivery has its own `deliveryId` if you want to de-duplicate downstream).
 - Outbound hooks fire for CLI sessions, gateway platforms, cron jobs and webhook-triggered runs alike. Use the Platform filter to narrow.
