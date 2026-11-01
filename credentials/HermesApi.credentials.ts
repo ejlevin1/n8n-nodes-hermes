@@ -24,7 +24,7 @@ export class HermesApi implements ICredentialType {
 			default: 'http://localhost:8642',
 			placeholder: 'http://localhost:8642',
 			description:
-				'URL of the Hermes API server. May include a profile prefix such as <code>/p/&lt;profile&gt;</code>.',
+				"URL of the Hermes API server. To use a named Hermes profile, end it with <code>/p/&lt;profile&gt;</code> (e.g. <code>http://localhost:8642/p/coder</code>) and use that profile's own API key.",
 		},
 		{
 			displayName: 'API Key',

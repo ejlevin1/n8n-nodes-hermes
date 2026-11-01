@@ -45,6 +45,16 @@ export interface NormalizedHermesError {
 	retryAfter?: string;
 }
 
+/**
+ * Named Hermes profile a Base URL targets (`…/p/<profile>`), lowercased; '' for no prefix or
+ * `default`. Used only to explain profile-specific 401/404 errors.
+ */
+export function profileFromBaseUrl(baseUrl: unknown): string {
+	const match = /\/p\/([^/?#]+)\/*$/.exec(String(baseUrl ?? '').trim());
+	const name = match ? decodeURIComponent(match[1]).toLowerCase() : '';
+	return name === 'default' ? '' : name;
+}
+
 /** Join a credential Base URL and an API path: strips trailing slashes from the base. */
 export function joinUrl(baseUrl: string, path: string): string {
 	const base = String(baseUrl ?? '')
@@ -205,6 +215,7 @@ export async function hermesApiRequest(
 	const credentialType: HermesCredentialType = opts.credentialType ?? 'hermesApi';
 	const credentials = await this.getCredentials(credentialType);
 	const url = joinUrl(String(credentials.baseUrl ?? ''), path);
+	const profile = profileFromBaseUrl(credentials.baseUrl);
 
 	const requestOptions: IHttpRequestOptions = {
 		method,
@@ -248,7 +259,15 @@ export async function hermesApiRequest(
 	const body = parseMaybeJson(response?.body);
 
 	if ((statusCode < 200 || statusCode >= 300) && !opts.ignoreHttpStatusErrors) {
-		throw createHermesApiError(this.getNode(), statusCode, body, headers);
+		const error = createHermesApiError(this.getNode(), statusCode, body, headers);
+		if (profile && (statusCode === 401 || statusCode === 404)) {
+			const hint =
+				statusCode === 401
+					? `Profile "${profile}" checks its own API_SERVER_KEY (from that profile's .env); the credential's API Key must match it.`
+					: `Profile "${profile}" may not be served by this gateway. Check \`hermes profile list\` and that it is not standalone or parked.`;
+			error.description = error.description ? `${error.description} | ${hint}` : hint;
+		}
+		throw error;
 	}
 
 	if (opts.returnFullResponse) {

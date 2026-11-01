@@ -104,6 +104,15 @@ export class HermesTrigger implements INodeType {
 					'Hermes hook events that start this workflow. Must match the <code>events</code> list of the hook entry in config.yaml.',
 			},
 			{
+				displayName: 'Profile',
+				name: 'profile',
+				type: 'string',
+				default: '',
+				placeholder: 'e.g. coder',
+				description:
+					'Optional. Only start the workflow for events from this Hermes profile (the event <code>profile</code> field, e.g. <code>default</code>). Other events get HTTP 200 without starting it. Leave empty to accept every profile.',
+			},
+			{
 				displayName: TOOL_EVENTS_NOTICE,
 				name: 'toolEventsNotice',
 				type: 'notice',
@@ -276,6 +285,7 @@ export class HermesTrigger implements INodeType {
 		const options = this.getNodeParameter('options', {}) as IDataObject;
 		const filters = this.getNodeParameter('filters', {}) as IDataObject;
 		const events = this.getNodeParameter('events', []) as string[];
+		const profile = this.getNodeParameter('profile', '') as string;
 
 		const rawBody: Buffer | undefined = req.rawBody;
 
@@ -326,6 +336,7 @@ export class HermesTrigger implements INodeType {
 			platforms: parseList(filters.platforms),
 			sessionId: typeof filters.sessionId === 'string' ? filters.sessionId : undefined,
 			toolName: typeof filters.toolName === 'string' ? filters.toolName : undefined,
+			profile,
 		});
 		if (rejection !== null) {
 			// 200 without workflowData: acknowledged, no execution started.

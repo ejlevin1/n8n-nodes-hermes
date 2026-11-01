@@ -124,6 +124,8 @@ export interface HermesTriggerFilters {
 	sessionId?: string;
 	/** Regex matched against `tool_name`. Invalid regex falls back to literal equality (as Hermes does). */
 	toolName?: string;
+	/** Hermes profile the event must come from (payload `profile`, case-insensitive). Empty: any. */
+	profile?: string;
 }
 
 export interface NormalizedHermesEvent extends IDataObject {
@@ -226,6 +228,12 @@ export function getFilterRejection(
 	const event = getEventName(payload, headers);
 	if (!event) return 'missing event name';
 	if (!filters.events.includes(event)) return `event "${event}" not selected`;
+
+	const profile = filters.profile?.trim().toLowerCase();
+	if (profile) {
+		const eventProfile = asNonEmptyString(payload.profile)?.toLowerCase() ?? null;
+		if (eventProfile !== profile) return `profile "${eventProfile ?? ''}" does not match filter`;
+	}
 
 	const platforms = (filters.platforms ?? []).map((p) => p.toLowerCase());
 	if (platforms.length > 0) {

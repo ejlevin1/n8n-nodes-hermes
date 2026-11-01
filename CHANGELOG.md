@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Optional **Profile** filter on the **Hermes Trigger** node, matched against the event `profile` field.
+- A hint on 401/404 responses when the credential Base URL targets a named profile (`…/p/<profile>`), about per-profile `API_SERVER_KEY` and served profiles.
+
 ## 0.1.0 (2026-10-17)
 
 Initial release.

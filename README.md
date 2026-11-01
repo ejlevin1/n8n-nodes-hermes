@@ -40,6 +40,14 @@ Every credential has a **Base URL** field holding the Hermes host. Requests go t
 
 The examples below assume Hermes reads environment variables from `~/.hermes/.env` and configuration from `~/.hermes/config.yaml`. Restart the gateway (`hermes gateway`) after changing either file.
 
+### Profiles
+
+One Hermes gateway serves every profile on the host: `default` at the bare URL and each named profile under `/p/<profile>/`. The profile is chosen by the credential, not the node:
+
+- Set the credential's **Base URL** to `http://<hermes-host>:8642/p/<profile>` (names as shown by `hermes profile list`).
+- Each named profile checks its **own** `API_SERVER_KEY`, from `~/.hermes/profiles/<profile>/.env`; it does not inherit the default profile's key. Put that profile's key in the credential, so you have one credential per profile. A 401 or 404 on a profile Base URL adds a hint about the key or about the profile not being served.
+- The **Hermes Trigger** node has an optional **Profile** filter: only events whose `profile` field matches (case-insensitive) start the workflow. Other events get HTTP 200 without starting it.
+
 ### Hermes API
 
 Used by every Hermes node resource except Webhook Route.

@@ -32,7 +32,7 @@ export class HermesWebhookApi implements ICredentialType {
 			default: 'http://localhost:8644',
 			placeholder: 'http://localhost:8644',
 			description:
-				'URL of the Hermes webhook adapter. May include a profile prefix such as <code>/p/&lt;profile&gt;</code>.',
+				"URL of the Hermes webhook adapter. To use a named Hermes profile, end it with <code>/p/&lt;profile&gt;</code> (e.g. <code>http://localhost:8642/p/coder</code>) and use that profile's own route secret.",
 		},
 		{
 			displayName: 'Route Secret',
