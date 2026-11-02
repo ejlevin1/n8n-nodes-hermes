@@ -14,6 +14,7 @@ import {
 import { TASK_ID_OPERATIONS } from '../nodes/Hermes/resources/kanbanTask/description';
 import {
 	KANBAN_ACTIONS,
+	KANBAN_GET_MAX_RUNS,
 	KANBAN_LIST_MAX_LIMIT,
 	extractTransitionReason,
 	kanbanBridgeErrorMessage,
@@ -94,7 +95,7 @@ describe('Kanban Task: description shape', () => {
 		}
 	});
 
-	it('offers all twelve operations from the plan, alphabetical and action-labelled', () => {
+	it('offers all fifteen operations from the plan, alphabetical and action-labelled', () => {
 		const operation = property('operation');
 		const options = (operation?.options ?? []) as Array<{
 			name: string;
@@ -108,7 +109,10 @@ describe('Kanban Task: description shape', () => {
 				'getAll',
 				'comment',
 				'complete',
+				'requestReview',
 				'requestChanges',
+				'requestChangesHuman',
+				'rejectCase',
 				'block',
 				'unblock',
 				'archive',
@@ -187,10 +191,69 @@ describe('Kanban Task: description shape', () => {
 		]);
 	});
 
-	it('requires a Reason for Request Changes and Block', () => {
+	it('requires a Reason for Request Changes, Request Changes (Human), Block and Reject Case', () => {
 		const reason = property('reason');
 		expect(reason?.required).toBe(true);
-		expect(reason?.displayOptions?.show?.operation).toEqual(['requestChanges', 'block']);
+		expect(reason?.displayOptions?.show?.operation).toEqual([
+			'requestChanges',
+			'requestChangesHuman',
+			'block',
+			'rejectCase',
+		]);
+	});
+
+	it('keeps the optional Request Review and Request Changes (Human) fields in Options', () => {
+		for (const [name, operation, expected] of [
+			['requestReviewOptions', 'requestReview', ['metadata', 'reviewer', 'summary']],
+			['requestChangesHumanOptions', 'requestChangesHuman', ['actor']],
+		] as Array<[string, string, string[]]>) {
+			const collection = property(name);
+			expect(collection?.type, name).toBe('collection');
+			expect(collection?.displayOptions?.show?.operation, name).toEqual([operation]);
+			const options = (collection?.options ?? []) as Array<{
+				name: string;
+				displayName: string;
+			}>;
+			expect(
+				options.map((o) => o.name),
+				name,
+			).toEqual(expected);
+			// n8n renders collection options in array order, so they have to be alphabetical.
+			const labels = options.map((o) => o.displayName);
+			expect(labels, name).toEqual([...labels].sort((a, b) => a.localeCompare(b)));
+		}
+	});
+
+	it('offers the gate-card create option, alphabetically placed with the rest', () => {
+		const options = (property('createOptions')?.options ?? []) as Array<{
+			name: string;
+			type: string;
+			displayName: string;
+		}>;
+		expect(options.find((o) => o.name === 'putIntoReview')?.type).toBe('boolean');
+		expect(options.find((o) => o.name === 'reviewMetadata')?.type).toBe('json');
+		expect(options.find((o) => o.name === 'reviewSummary')?.type).toBe('string');
+		const labels = options.map((o) => o.displayName);
+		expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b)));
+	});
+
+	it('warns about the Reject Case archive order before the user runs it', () => {
+		const notice = property('rejectCaseNotice');
+		expect(notice?.type).toBe('notice');
+		expect(notice?.displayOptions?.show?.operation).toEqual(['rejectCase']);
+		expect(notice?.displayName).toMatch(/not-done descendant/);
+		expect(notice?.displayName).toMatch(/releases/);
+		expect(property('requestChangesHumanNotice')?.type).toBe('notice');
+	});
+
+	it('tells the user how many runs Get returns', () => {
+		const operation = property('operation');
+		const get = ((operation?.options ?? []) as Array<{ value: string; description?: string }>).find(
+			(o) => o.value === 'get',
+		);
+		expect(KANBAN_GET_MAX_RUNS).toBe(20);
+		expect(get?.description).toContain(String(KANBAN_GET_MAX_RUNS));
+		expect(get?.description).toMatch(/metadata/);
 	});
 
 	it('registers the resource so the node renders it', () => {
@@ -235,7 +298,10 @@ describe('Kanban Task: the request actually sent', () => {
 			getAll: 'tasks/list',
 			comment: 'tasks/comment',
 			complete: 'tasks/action',
+			requestReview: 'tasks/action',
 			requestChanges: 'tasks/action',
+			requestChangesHuman: 'tasks/action',
+			rejectCase: 'tasks/action',
 			block: 'tasks/action',
 			unblock: 'tasks/action',
 			archive: 'tasks/action',
@@ -405,6 +471,211 @@ describe('Kanban Task: request body per operation', () => {
 		});
 	});
 
+	it('Request Review sends action=request_review with the optional review fields', async () => {
+		const { request } = await run(
+			'requestReview',
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+				requestReviewOptions: {
+					summary: 'Gate 1: worth a look?',
+					metadata: '{"hitl":{"v":1,"stage":"worth-a-look"}}',
+					reviewer: ' deal-analyst ',
+				},
+			},
+			ok({ ok: true, status: 'review' }),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			task_id: 'kbb_test_task_9',
+			action: 'request_review',
+			summary: 'Gate 1: worth a look?',
+			metadata: { hitl: { v: 1, stage: 'worth-a-look' } },
+			reviewer: 'deal-analyst',
+		});
+	});
+
+	it('Request Review with no options sends only the action, for a gate card', async () => {
+		const { request } = await run(
+			'requestReview',
+			{ board: 'acquisitions', taskId: 'kbb_test_task_9', requestReviewOptions: {} },
+			ok({ ok: true, status: 'review' }),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			task_id: 'kbb_test_task_9',
+			action: 'request_review',
+		});
+	});
+
+	it('Request Review names the Reviewer in a 403, because the bridge scopes it as an assignee', async () => {
+		const error = await expectFailure(
+			'requestReview',
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+				requestReviewOptions: { reviewer: 'deal-analyst' },
+			},
+			{ statusCode: 403, body: { detail: 'assignee not in scope' } },
+		);
+		expect(error.message).toMatch(/deal-analyst/);
+		expect(error.message).toMatch(/request_review/);
+	});
+
+	it('Request Changes (Human) sends action=request_changes_human with the reason and actor', async () => {
+		const { request } = await run(
+			'requestChangesHuman',
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+				reason: 'The rent schedule is missing',
+				requestChangesHumanOptions: { actor: ' alex@example.invalid ' },
+			},
+			ok({ ok: true, status: 'ready' }),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			task_id: 'kbb_test_task_9',
+			action: 'request_changes_human',
+			reason: 'The rent schedule is missing',
+			actor: 'alex@example.invalid',
+		});
+	});
+
+	it('Request Changes (Human) omits the actor when it is not set', async () => {
+		const { request } = await run(
+			'requestChangesHuman',
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+				reason: 'The rent schedule is missing',
+				requestChangesHumanOptions: {},
+			},
+			ok({ ok: true, status: 'ready' }),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			task_id: 'kbb_test_task_9',
+			action: 'request_changes_human',
+			reason: 'The rent schedule is missing',
+		});
+	});
+
+	it('Reject Case sends action=reject_case with the reason and returns the archived descendants', async () => {
+		const { request, items } = await run(
+			'rejectCase',
+			{
+				board: 'acquisitions',
+				taskId: 'kbb_test_task_9',
+				reason: 'Outside the buy box',
+			},
+			ok({
+				ok: true,
+				status: 'archived',
+				archived_descendants: ['kbb_test_task_11', 'kbb_test_task_10'],
+			}),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			task_id: 'kbb_test_task_9',
+			action: 'reject_case',
+			reason: 'Outside the buy box',
+		});
+		expect(items).toEqual([
+			{
+				json: {
+					ok: true,
+					status: 'archived',
+					archived_descendants: ['kbb_test_task_11', 'kbb_test_task_10'],
+				},
+			},
+		]);
+	});
+
+	it('Create sends initial_review when Put Into Review is on', async () => {
+		const { request } = await run(
+			'create',
+			{
+				board: 'acquisitions',
+				title: 'Chiropractic practice · Kenosha County, WI',
+				createOptions: {
+					putIntoReview: true,
+					reviewSummary: 'Worth a look?',
+					reviewMetadata: '{"hitl":{"v":1,"process":"acquisitions"}}',
+				},
+			},
+			ok({ task_id: 'kbb_test_task_9', created: true, status: 'review' }),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			title: 'Chiropractic practice · Kenosha County, WI',
+			initial_review: {
+				summary: 'Worth a look?',
+				metadata: { hitl: { v: 1, process: 'acquisitions' } },
+			},
+		});
+	});
+
+	it('Create sends an empty initial_review for a descriptor-less gate card', () => {
+		// Both fields are optional on the bridge, so the toggle alone is a valid gate card.
+		expect(buildCreateBody('acquisitions', 'A gate', { putIntoReview: true })).toEqual({
+			board: 'acquisitions',
+			title: 'A gate',
+			initial_review: {},
+		});
+	});
+
+	it('Create omits initial_review when Put Into Review is off', () => {
+		expect(buildCreateBody('acquisitions', 'A task', { putIntoReview: false })).toEqual({
+			board: 'acquisitions',
+			title: 'A task',
+		});
+	});
+
+	it('Create keeps initial_review alongside the parents that make it a gate', async () => {
+		const { request } = await run(
+			'create',
+			{
+				board: 'acquisitions',
+				title: 'Gate 1',
+				createOptions: { putIntoReview: true, priority: 5, reviewSummary: 'Worth a look?' },
+			},
+			ok({ task_id: 'kbb_test_task_9', created: true, status: 'review' }),
+		);
+		expect(request.body).toEqual({
+			board: 'acquisitions',
+			title: 'Gate 1',
+			priority: 5,
+			initial_review: { summary: 'Worth a look?' },
+		});
+	});
+
+	it('Get passes the runs array through untouched, metadata and all', async () => {
+		const runs = [
+			{
+				id: 'kbb_test_run_3',
+				profile: 'deal-analyst',
+				status: 'done',
+				outcome: 'review_requested',
+				started_at: '2026-11-01T10:00:00Z',
+				ended_at: '2026-11-01T10:42:00Z',
+				summary: 'Analysis ready',
+				metadata: { hitl: { v: 1, stage: 'pursue' }, upside: ['owner hours'] },
+				error: null,
+			},
+		];
+		const { items } = await run(
+			'get',
+			{ board: 'acquisitions', taskId: 'kbb_test_task_9' },
+			ok({ board: 'acquisitions', task: { id: 'kbb_test_task_9', status: 'review' }, runs }),
+		);
+		expect((items[0].json as IDataObject).runs).toEqual(runs);
+		// The same object, not a re-shaped copy: a `hitl` descriptor has to survive the hop.
+		expect(((items[0].json as IDataObject).runs as IDataObject[])[0].metadata).toEqual(
+			runs[0].metadata,
+		);
+	});
+
 	it('Block sends action=block with the reason', async () => {
 		const { request } = await run(
 			'block',
@@ -486,7 +757,10 @@ describe('Kanban Task: request body per operation', () => {
 	it('maps every action operation to the plan’s wire action value', () => {
 		expect(KANBAN_ACTIONS).toEqual({
 			complete: 'complete',
+			requestReview: 'request_review',
 			requestChanges: 'request_changes',
+			requestChangesHuman: 'request_changes_human',
+			rejectCase: 'reject_case',
 			block: 'block',
 			unblock: 'unblock',
 			archive: 'archive',
@@ -494,6 +768,11 @@ describe('Kanban Task: request body per operation', () => {
 			reprioritize: 'reprioritize',
 			edit: 'edit',
 		});
+	});
+
+	it('keeps request_changes and request_changes_human as two distinct verbs', () => {
+		// The bridge kept the old verb for back-compat; they are not the same transition.
+		expect(KANBAN_ACTIONS.requestChanges).not.toBe(KANBAN_ACTIONS.requestChangesHuman);
 	});
 });
 
@@ -535,6 +814,55 @@ describe('Kanban Task: local validation', () => {
 			board: 'acquisitions',
 			taskId: 'kbb_test_task_9',
 			completeOptions: { metadata: '[1,2]' },
+		});
+	});
+
+	it('rejects a Reason-less Request Changes (Human) or Reject Case before sending anything', async () => {
+		await failsWith('requestChangesHuman', {
+			board: 'acquisitions',
+			taskId: 'kbb_test_task_9',
+			reason: ' ',
+			requestChangesHumanOptions: {},
+		});
+		await failsWith('rejectCase', {
+			board: 'acquisitions',
+			taskId: 'kbb_test_task_9',
+			reason: '',
+		});
+	});
+
+	it('rejects invalid Request Review Metadata before sending anything', async () => {
+		await failsWith('requestReview', {
+			board: 'acquisitions',
+			taskId: 'kbb_test_task_9',
+			requestReviewOptions: { metadata: 'not json' },
+		});
+		await failsWith('requestReview', {
+			board: 'acquisitions',
+			taskId: 'kbb_test_task_9',
+			requestReviewOptions: { metadata: '["a"]' },
+		});
+	});
+
+	it('refuses review fields left behind with Put Into Review off, instead of dropping them', async () => {
+		// Silently ignoring them would queue the card when the workflow asked for a gate.
+		await failsWith('create', {
+			board: 'acquisitions',
+			title: 'A gate',
+			createOptions: { reviewSummary: 'Worth a look?' },
+		});
+		await failsWith('create', {
+			board: 'acquisitions',
+			title: 'A gate',
+			createOptions: { reviewMetadata: '{"hitl":{"v":1}}' },
+		});
+	});
+
+	it('rejects invalid Review Metadata on Create', async () => {
+		await failsWith('create', {
+			board: 'acquisitions',
+			title: 'A gate',
+			createOptions: { putIntoReview: true, reviewMetadata: 'not json' },
 		});
 	});
 
