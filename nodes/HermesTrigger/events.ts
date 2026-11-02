@@ -81,7 +81,7 @@ export const HERMES_TRIGGER_EVENTS: INodePropertyOptions[] = [
 		name: 'Kanban Task Completed',
 		value: 'kanban_task_completed',
 		description:
-			'A Kanban task was completed. Carries board, assignee, run_id and summary. Delivered by Hermes hooks.outbound and by the kanban-bridge plugin.',
+			'A Kanban task was completed. Carries board, assignee, run_id and summary. Delivered by Hermes hooks.outbound and by the kanban-bridge plugin; a bridge delivery also carries the run metadata as <code>extra.run_metadata</code>.',
 	},
 	{
 		name: 'Kanban Task Created',
@@ -92,7 +92,7 @@ export const HERMES_TRIGGER_EVENTS: INodePropertyOptions[] = [
 		name: 'Kanban Task Review Requested',
 		value: 'kanban_task_review_requested',
 		description:
-			'A Kanban task moved to review and is waiting for human approval. Hermes fires no hook for this, so it only arrives through the kanban-bridge plugin.',
+			'A Kanban task moved to review and is waiting for human approval. Hermes fires no hook for this, so it only arrives through the kanban-bridge plugin, which also carries the review run metadata as <code>extra.run_metadata</code>.',
 	},
 	{
 		name: 'Kanban Task Unblocked',
@@ -242,6 +242,11 @@ export function isKanbanBridgeEvent(event: string): boolean {
  * Bridge-delivery keys that sit top-level in the body (see the wire contract) but are the Kanban
  * equivalents of what Hermes hooks put in `extra`. They are folded into `extra` so a workflow
  * reads `extra.task_id` whichever source delivered the event.
+ *
+ * `run_metadata` (bridge v0.2.0) is the run's own `metadata` object, sent on `review_requested`
+ * and `completed` deliveries and omitted otherwise. It carries whole documents — a kanban-tasks
+ * `hitl` descriptor, for instance — so it is folded through **untouched**: no reshaping, no
+ * flattening, no stringifying.
  */
 export const KANBAN_BRIDGE_EXTRA_KEYS = [
 	'board',
@@ -255,6 +260,7 @@ export const KANBAN_BRIDGE_EXTRA_KEYS = [
 	'priority',
 	'actor',
 	'payload',
+	'run_metadata',
 ];
 
 export const DEFAULT_EVENTS = ['post_llm_call'];
@@ -461,8 +467,8 @@ export function matchesFilters(
  *
  * kanban-bridge deliveries use the same envelope but put the task coordinates top-level
  * (`board, task_id, event_id, event_kind, run_id, title, status, assignee, priority, actor,
- * payload`). Those are folded into `extra` so a workflow reads `extra.task_id` whichever source
- * delivered the event; an explicit `extra` in the body still wins.
+ * payload, run_metadata`). Those are folded into `extra` so a workflow reads `extra.task_id`
+ * whichever source delivered the event; an explicit `extra` in the body still wins.
  */
 export function normalizeEvent(payload: IDataObject, headers?: HeaderBag): NormalizedHermesEvent {
 	const event = getEventName(payload, headers);

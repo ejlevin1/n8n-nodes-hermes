@@ -1,5 +1,9 @@
 import type { INodeProperties } from 'n8n-workflow';
-import { KANBAN_LIST_MAX_LIMIT, KANBAN_STATUSES } from '../../helpers/kanbanBridge';
+import {
+	KANBAN_GET_MAX_RUNS,
+	KANBAN_LIST_MAX_LIMIT,
+	KANBAN_STATUSES,
+} from '../../helpers/kanbanBridge';
 
 const show = (operation: string[]) => ({ show: { resource: ['kanbanTask'], operation } });
 
@@ -12,8 +16,11 @@ export const TASK_ID_OPERATIONS = [
 	'complete',
 	'edit',
 	'get',
+	'rejectCase',
 	'reprioritize',
 	'requestChanges',
+	'requestChangesHuman',
+	'requestReview',
 	'unblock',
 ];
 
@@ -76,7 +83,7 @@ export const kanbanTaskOperations: INodeProperties = {
 		{
 			name: 'Get',
 			value: 'get',
-			description: 'Get a task with its comments, recent events and runs',
+			description: `Get a task with its comments, its last 50 events and its latest ${KANBAN_GET_MAX_RUNS} runs, each with the run outcome, summary and metadata`,
 			action: 'Get a kanban task',
 		},
 		{
@@ -84,6 +91,13 @@ export const kanbanTaskOperations: INodeProperties = {
 			value: 'getAll',
 			description: `List the tasks on a board, highest priority first and oldest first within a priority (at most ${KANBAN_LIST_MAX_LIMIT})`,
 			action: 'Get many kanban tasks',
+		},
+		{
+			name: 'Reject Case',
+			value: 'rejectCase',
+			description:
+				'Reject a task and its sub-tree: archive every not-done descendant first, then the task, recording the reason as a comment',
+			action: 'Reject a kanban case',
 		},
 		{
 			name: 'Reprioritize',
@@ -96,6 +110,20 @@ export const kanbanTaskOperations: INodeProperties = {
 			value: 'requestChanges',
 			description: 'Send a task in review back for more work, with a reason',
 			action: 'Request changes on a kanban task',
+		},
+		{
+			name: 'Request Changes (Human)',
+			value: 'requestChangesHuman',
+			description:
+				'Relay a human verdict on a review task: claim the review as this token, then send the task back to its implementer with a reason',
+			action: 'Request changes on a kanban task for a human',
+		},
+		{
+			name: 'Request Review',
+			value: 'requestReview',
+			description:
+				'Move a task in ready or running to review, recording a summary and metadata on the review run',
+			action: 'Request review of a kanban task',
 		},
 		{
 			name: 'Unblock',
@@ -205,6 +233,31 @@ export const kanbanTaskFields: INodeProperties[] = [
 				typeOptions: { numberPrecision: 0 },
 				default: 0,
 				description: priorityDescription,
+			},
+			{
+				displayName: 'Put Into Review',
+				name: 'putIntoReview',
+				type: 'boolean',
+				default: false,
+				description:
+					'Whether to create the task already in <code>review</code> instead of queueing it — a gate card waiting for a human decision. Sent as <code>initial_review</code>, so the token needs both <code>create</code> and <code>request_review</code> in its scopes; if the bridge refuses the review it deletes the task again and nothing is left behind.',
+			},
+			{
+				displayName: 'Review Metadata',
+				name: 'reviewMetadata',
+				type: 'json',
+				default: '{}',
+				description:
+					'JSON object stored as the review run metadata, for example a kanban-tasks <code>hitl</code> descriptor. Needs Put Into Review.',
+			},
+			{
+				displayName: 'Review Summary',
+				name: 'reviewSummary',
+				type: 'string',
+				typeOptions: { rows: 2 },
+				default: '',
+				description:
+					'Short summary recorded on the review this task opens, shown on the board and sent with the review_requested event. Needs Put Into Review.',
 			},
 			{
 				displayName: 'Skills',
@@ -319,7 +372,84 @@ export const kanbanTaskFields: INodeProperties[] = [
 		],
 	},
 
-	// Request Changes / Block
+	// Request Review
+	{
+		displayName: 'Options',
+		name: 'requestReviewOptions',
+		type: 'collection',
+		placeholder: 'Add Option',
+		default: {},
+		displayOptions: show(['requestReview']),
+		options: [
+			{
+				displayName: 'Metadata',
+				name: 'metadata',
+				type: 'json',
+				default: '{}',
+				description:
+					'JSON object stored as the review run metadata — where a kanban-tasks <code>hitl</code> descriptor goes. The Get operation returns it under <code>runs[].metadata</code>.',
+			},
+			{
+				displayName: 'Reviewer',
+				name: 'reviewer',
+				type: 'string',
+				default: '',
+				placeholder: 'deal-analyst',
+				description:
+					'Hermes profile the review is handed to. It also becomes the task assignee, so the token must have it in its scopes. Leave it empty for a gate card that waits for a human.',
+			},
+			{
+				displayName: 'Summary',
+				name: 'summary',
+				type: 'string',
+				typeOptions: { rows: 2 },
+				default: '',
+				description:
+					'Short handoff summary shown on the board and sent with the review_requested event',
+			},
+		],
+	},
+
+	// Request Changes (Human)
+	{
+		displayName:
+			'<b>Request Changes (Human)</b> claims the review as this token first, so it also works on a review task with no active reviewer run — the case where plain <b>Request Changes</b> returns 409. It needs a task in <code>review</code> whose review handoff records an implementer; a gate card has none, so use <b>Reject Case</b> or <b>Complete (Approve)</b> on those.',
+		name: 'requestChangesHumanNotice',
+		type: 'notice',
+		default: '',
+		displayOptions: show(['requestChangesHuman']),
+	},
+	{
+		displayName: 'Options',
+		name: 'requestChangesHumanOptions',
+		type: 'collection',
+		placeholder: 'Add Option',
+		default: {},
+		displayOptions: show(['requestChangesHuman']),
+		options: [
+			{
+				displayName: 'Actor',
+				name: 'actor',
+				type: 'string',
+				default: '',
+				placeholder: 'alex@example.invalid',
+				description:
+					'Human this verdict is relayed for. The bridge prefixes it onto the reason so the implementer sees who asked; the authenticated author stays <code>n8n:&lt;token label&gt;</code>.',
+			},
+		],
+	},
+
+	// Reject Case
+	{
+		displayName:
+			'<b>Reject Case</b> archives the whole sub-tree: every not-done descendant first, deepest first, and only then this task. That order is the point — archiving a parent on its own <i>releases</i> its waiting children to be worked. Descendants already <code>done</code> are kept, and the response lists what was archived under <code>archived_descendants</code>.',
+		name: 'rejectCaseNotice',
+		type: 'notice',
+		default: '',
+		displayOptions: show(['rejectCase']),
+	},
+
+	// Request Changes / Request Changes (Human) / Block / Reject Case
 	{
 		displayName: 'Reason',
 		name: 'reason',
@@ -327,9 +457,9 @@ export const kanbanTaskFields: INodeProperties[] = [
 		typeOptions: { rows: 3 },
 		required: true,
 		default: '',
-		displayOptions: show(['requestChanges', 'block']),
+		displayOptions: show(['requestChanges', 'requestChangesHuman', 'block', 'rejectCase']),
 		description:
-			'Why the task is going back / being blocked. It is stored on the event and delivered to the Hermes Trigger.',
+			'Why the task is going back (Request Changes), being blocked (Block) or being rejected (Reject Case). It is stored on the event and delivered to the Hermes Trigger; Reject Case also records it as a comment on the task.',
 	},
 
 	// Assign

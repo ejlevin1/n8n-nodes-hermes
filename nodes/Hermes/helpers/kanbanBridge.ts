@@ -26,6 +26,12 @@ export const KANBAN_BRIDGE_HEALTH_PATH = `${KANBAN_BRIDGE_BASE_PATH}/health`;
 export const KANBAN_LIST_MAX_LIMIT = 200;
 
 /**
+ * Server-side cap on the `runs` array `v1/tasks/get` returns (`MAX_RUNS` in the plugin). The
+ * bridge slices the tail, so these are the task's *latest* runs.
+ */
+export const KANBAN_GET_MAX_RUNS = 20;
+
+/**
  * Kanban task statuses, in dashboard column order (`DEFAULT_WORKFLOW` in
  * hermes_cli/kanban_workflow.py, plus `archived`).
  */
@@ -41,10 +47,19 @@ export const KANBAN_STATUSES = [
 	'archived',
 ] as const;
 
-/** `action` values accepted by `v1/tasks/action`, keyed by n8n operation. */
+/**
+ * `action` values accepted by `v1/tasks/action`, keyed by n8n operation.
+ *
+ * `request_changes` and `request_changes_human` are two separate verbs on the bridge, not one with
+ * a flag: the plain verb needs an active reviewer run (only the dispatcher's review lane makes
+ * one), the `_human` verb claims the review itself first. Both are kept.
+ */
 export const KANBAN_ACTIONS: Record<string, string> = {
 	complete: 'complete',
+	requestReview: 'request_review',
 	requestChanges: 'request_changes',
+	requestChangesHuman: 'request_changes_human',
+	rejectCase: 'reject_case',
 	block: 'block',
 	unblock: 'unblock',
 	archive: 'archive',
@@ -149,7 +164,7 @@ export function kanbanBridgeErrorMessage(
 		const reason = extractTransitionReason(body) ?? server;
 		return {
 			message: `The Kanban Bridge refused this change${reason ? `: ${reason}` : ' because the task is in a status that does not allow it'}`,
-			description: `Kanban transitions are checked against the task's current status (triage, todo, scheduled, ready, running, blocked, review, done, archived)${target ? ` — re-read ${target} with the Get operation to see where it is now` : ''}. Complete (Approve) is meant for a task in review.`,
+			description: `Kanban transitions are checked against the task's current status (triage, todo, scheduled, ready, running, blocked, review, done, archived)${target ? ` — re-read ${target} with the Get operation to see where it is now` : ''}. Complete (Approve) is meant for a task in review; Request Review needs one in ready or running; Request Changes (Human) needs a review card whose handoff records an implementer, which a gate card never has.`,
 		};
 	}
 	return undefined;

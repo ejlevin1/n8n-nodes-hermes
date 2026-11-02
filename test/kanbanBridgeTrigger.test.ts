@@ -6,6 +6,7 @@ import {
 	HERMES_TRIGGER_EVENT_VALUES,
 	KANBAN_ANY_EVENT,
 	KANBAN_BRIDGE_EVENTS,
+	KANBAN_BRIDGE_EXTRA_KEYS,
 	KANBAN_EVENTS,
 	KANBAN_HOOK_EVENTS,
 	buildKanbanTargetsYaml,
@@ -595,6 +596,51 @@ describe('Kanban bridge: the bridge wire body', () => {
 		expect(item.extra).not.toHaveProperty('actor');
 		expect(item.extra).not.toHaveProperty('run_id');
 		expect(item.extra.payload).toEqual({});
+	});
+
+	it('passes run_metadata through untouched on a review_requested delivery', () => {
+		// kanban-bridge v0.2.0 appends the run's own metadata to `review_requested` and `completed`.
+		// It can hold a whole kanban-tasks `hitl` descriptor, so nothing may reshape it.
+		const descriptor = {
+			hitl: {
+				v: 1,
+				process: 'acquisitions',
+				stage: 'worth-a-look',
+				case: { key: 'listing:1', title: 'Chiropractic practice' },
+				show: [{ label: 'Asking price', value: '$350,000' }],
+				actions: [{ id: 'advance', label: 'Advance', kanban: 'complete' }],
+			},
+		};
+		const item = normalizeEvent(
+			bridgeEvent('kanban_task_review_requested', { run_metadata: descriptor }),
+		);
+		expect(item.extra.run_metadata).toEqual(descriptor);
+		// Same object, not a copy flattened or stringified on the way through.
+		expect(item.extra.run_metadata).toBe(descriptor);
+	});
+
+	it('passes run_metadata through on a completed delivery too', () => {
+		const item = normalizeEvent(
+			bridgeEvent('kanban_task_completed', { run_metadata: { decision: 'advance' } }),
+		);
+		expect(item.extra.run_metadata).toEqual({ decision: 'advance' });
+	});
+
+	it('omits run_metadata when the delivery has none, like every other bridge key', () => {
+		expect(normalizeEvent(bridgeEvent())).not.toHaveProperty('extra.run_metadata');
+		expect(
+			normalizeEvent(bridgeEvent('kanban_task_completed', { run_metadata: null })).extra,
+		).not.toHaveProperty('run_metadata');
+	});
+
+	it('does not invent run_metadata on a Hermes hook delivery', () => {
+		expect(normalizeEvent(kanbanEvent('kanban_task_completed')).extra).not.toHaveProperty(
+			'run_metadata',
+		);
+	});
+
+	it('lists run_metadata among the keys folded out of a bridge body', () => {
+		expect(KANBAN_BRIDGE_EXTRA_KEYS).toContain('run_metadata');
 	});
 
 	it('lets an explicit extra in the body win over the folded keys', () => {
