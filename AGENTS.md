@@ -100,3 +100,110 @@ regarding building community nodes:
 - https://docs.n8n.io/integrations/creating-nodes/overview/
 - https://docs.n8n.io/integrations/creating-nodes/build/reference/
 - https://docs.n8n.io/integrations/creating-nodes/build/reference/ux-guidelines/
+
+## Kanban capability: kanban-devbox required
+
+This package's Kanban Task resource and bridge trigger are part of the Hermes kanban capability. **Every build or test that touches kanban (boards, the bridge, the Acquisitions/process workflows) runs in a kanban-devbox run** (CLI on the Mac mini, skill `kanban-devbox`). The rules below are copied verbatim from `ejlevin1/kanban-devbox` `docs/agent-rules.md` (v0.1.1); fix them there, then re-copy.
+
+
+**If you are changing `hermes-kanban-tasks`, `hermes-kanban-bridge`, `n8n-nodes-hermes`, the
+`Acquisitions · *` workflows, the `acq_*`/`proc_stages` tables, or adding a new process on
+kanban-tasks — you build it in a kanban-devbox run. Not against live.**
+
+The `kanban-devbox` skill and each repo's `AGENTS.md`/`CLAUDE.md` copy this file. It is the
+source; fix it here.
+
+---
+
+### 1. The shape of a build
+
+```sh
+# 1. open a sandbox. Everything it creates carries the run's 4-hex short id.
+eval "$(kanban-devbox up --purpose <what-you-are-building> \
+          --live-board acquisitions \
+          --fork 'Acquisitions · events' --fork 'Acquisitions · screen' \
+          --tables acq_deals --tables proc_stages \
+          --secret-env KANBAN_BRIDGE_N8N_DEV_SECRET)"
+# -> KD_RUN, KD_SHORT, KD_BOARD_<P>, KD_TABLE_<T>, KD_WF_<NAME>, KD_TARGET, KD_TOKEN_FILE, KD_TMP
+
+# 2. build and test against the dev copies only. Record anything else you create.
+kanban-devbox add card "$KD_RUN" "try the new stage gate" --board "$KD_BOARD_..."
+kanban-devbox heartbeat "$KD_RUN"          # at least every 30 min, or sweep may reclaim it
+
+# 3. when it works, take the live lease and promote.
+kanban-devbox lease acquire "$KD_RUN" "<live workflow id>" --kind workflow
+kanban-devbox promote "$KD_RUN" "<live workflow id>" --dry-run   # read it first
+kanban-devbox promote "$KD_RUN" "<live workflow id>"
+
+# 4. tear it down and prove it.
+kanban-devbox down "$KD_RUN"
+kanban-devbox verify-clean "$KD_RUN"       # non-zero means you are not done
+```
+
+**A build is not finished until `verify-clean` exits 0.** That is the whole contract.
+
+### 2. Never touch live directly
+
+| Don't | Do |
+|---|---|
+| edit an `Acquisitions · *` workflow in the n8n UI | `--fork` it, edit the `KD <short> · …` copy, `promote` |
+| write to `acq_*` / `proc_stages` | `--tables` a copy, or `promote-table-rows` with `--key` |
+| create a card on `acquisitions` | create it on the run's own `kd-<short>-…` board |
+| `kbctl token create` by hand | `up` mints one scoped to the run's boards |
+| add a target to `config.yaml` by hand | `kanban-devbox add target` (it takes the global lock) |
+| `ktctl config set boards …` | `up` appends the run's board additively |
+
+There is exactly one exception, and it is `promote`. It refuses unless you hold the live lease
+**and** the live workflow's `versionId` still matches what the fork was taken from, and it
+refuses again if any `kd-`/`KD `/`kd_` string survived the un-rewrite.
+
+### 3. Never touch these at all
+
+The investing build (`inv-*`, `invest-*`, `Invest · *`), tool-approvals, `hermes-config`, and
+any board, workflow or table not named in section 2. They are other people's builds.
+
+### 4. Parallel lanes
+
+Another agent is probably running right now. What that means for you:
+
+* **Use your own run.** Never `add` to, `promote` from, `down` or `heartbeat` a run id that is
+  not yours — `kanban-devbox status` shows who owns what.
+* **Heartbeat.** `sweep` protects an open run with a heartbeat under 30 minutes old. A run that
+  stops beating looks exactly like a crashed one, because it usually is.
+* **Take the lease before you change anything live**, and expect to wait. The error names the
+  run and the owner holding it and when it expires. Don't take over a live lease; if it is
+  expired, the takeover is logged and the other agent will see it in `status`.
+* **Never kill by pattern.** No `pkill -f`, no `tmux kill-session -a`, no `git branch -D` of
+  anything whose name you did not check. Kill only a PID you saved.
+* **Cards spawn real workers.** The dispatcher's 4-per-profile cap is shared with the live
+  boards, so a run is capped at 5 cards (`--max-cards` to raise it) and `up` warns when a live
+  board already has workers running.
+
+### 5. Secrets
+
+* The bridge token's plaintext exists in exactly one place: the 0600 file `up` wrote, named by
+  `KD_TOKEN_FILE`. **Never `cat` it into a transcript, a card, a commit or a log.** Move it into
+  the n8n credential and delete the file.
+* A push target's shared secret comes from the profile `.env` via `secret_env`. An inline
+  `secret:` key is refused by the bridge itself — don't try.
+* The n8n API key is read from the file named by `KD_N8N_API_KEY_FILE`. Don't echo it.
+* Test data is synthetic: `kbb_test_…` tokens, `Alex Example`, `@example.invalid` addresses. No
+  real deal names, no real email addresses, no real hostnames beyond `mbp-m2` and the Mac mini.
+* Real email sends go to Eric only, subject-prefixed `[KD <short>]`.
+
+### 6. If something goes wrong
+
+| Situation | What to do |
+|---|---|
+| a lane crashed mid-`up` | `kanban-devbox down <run>` — the manifest records the intent *before* each create, so the undo is there even for a resource the dead process never finished making |
+| you don't know what is out there | `kanban-devbox sweep --older-than 0s` (report only; it never removes without `--apply`) |
+| a stale lease is in your way | wait for it, or let it expire and take it over — the takeover is recorded |
+| `down` reports a leftover | fix the cause and re-run `down`; it is idempotent. `--force` stops waiting for the run's board workers |
+| `verify-clean` says *unverified* | that is not clean. n8n or mbp-m2 could not be reached, so nobody knows. Fix the connection and ask again |
+| a promote is refused as *live changed since fork* | someone edited live. Re-fork from current live and redo your change on top; do not override |
+
+### 7. What you must not add
+
+Don't add policy, failsafes, auto-deletion or features the plan you are working from does not
+specify. The weekly sweep cron is **notify only** by decision (V4) — don't make it `--apply`.
+Write ideas down instead; they are cheap to propose and expensive to undo.
